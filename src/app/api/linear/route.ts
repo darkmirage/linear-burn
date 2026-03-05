@@ -81,6 +81,8 @@ export async function GET(req: NextRequest) {
       stateName: string;
       assignee: string | null;
       project: string | null;
+      priority: number;
+      priorityLabel: string;
     }> = [];
 
     let hasMore = true;
@@ -112,6 +114,8 @@ export async function GET(req: NextRequest) {
           stateName: state?.name ?? "Unknown",
           assignee: assignee?.name ?? null,
           project: project?.name ?? null,
+          priority: issue.priority,
+          priorityLabel: issue.priorityLabel,
         });
       }
 

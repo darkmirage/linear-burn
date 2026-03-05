@@ -27,10 +27,12 @@ type Issue = {
   stateName: string;
   assignee: string | null;
   project: string | null;
+  priority: number;
+  priorityLabel: string;
 };
 
 type ViewMode = "created" | "active" | "burndown" | "closed";
-type ColorMode = "none" | "project" | "assignee" | "status";
+type ColorMode = "none" | "project" | "assignee" | "status" | "priority";
 
 const COLORS = [
   "#60A5FA", "#F87171", "#34D399", "#FBBF24", "#A78BFA",
@@ -42,6 +44,7 @@ function getColorKey(issue: Issue, colorBy: ColorMode): string {
   if (colorBy === "project") return issue.project ?? "No Project";
   if (colorBy === "assignee") return issue.assignee ?? "Unassigned";
   if (colorBy === "status") return issue.stateName;
+  if (colorBy === "priority") return issue.priorityLabel;
   return "Issues";
 }
 
@@ -162,6 +165,7 @@ const COLOR_LABELS: Record<ColorMode, string> = {
   project: "Project",
   assignee: "Assignee",
   status: "Status",
+  priority: "Priority",
 };
 
 export default function Home() {
