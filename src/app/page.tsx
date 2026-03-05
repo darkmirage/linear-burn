@@ -189,6 +189,7 @@ export default function Home() {
     return d.toISOString().split("T")[0];
   });
   const [endDate, setEndDate] = useState("");
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/linear?action=teams")
@@ -248,6 +249,33 @@ export default function Home() {
     () => buildChartData(issues, viewMode, colorMode, startDate, endDate),
     [issues, viewMode, colorMode, startDate, endDate],
   );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleChartClick = (state: any) => {
+    if (state?.activeLabel) {
+      setSelectedDay((prev) =>
+        prev === state.activeLabel ? null : state.activeLabel,
+      );
+    }
+  };
+
+  const filteredIssues = useMemo(() => {
+    if (!selectedDay) return issues;
+    return issues.filter((issue) => {
+      const created = issue.createdAt.split("T")[0];
+      const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+      if (viewMode === "created") {
+        return created === selectedDay;
+      } else if (viewMode === "closed") {
+        return doneDate === selectedDay;
+      } else if (viewMode === "active") {
+        return created <= selectedDay && (!doneDate || doneDate > selectedDay);
+      } else {
+        // burndown: not yet completed as of that day
+        return !doneDate || doneDate > selectedDay;
+      }
+    });
+  }, [issues, selectedDay, viewMode]);
 
   const totalScope = issues.length;
   const completedCount = issues.filter(
@@ -309,7 +337,10 @@ export default function Home() {
               label="View"
               options={VIEW_LABELS}
               value={viewMode}
-              onChange={setViewMode}
+              onChange={(v) => {
+                setViewMode(v);
+                setSelectedDay(null);
+              }}
             />
             <ToggleGroup
               label="Color by"
@@ -328,7 +359,11 @@ export default function Home() {
 
           <div className="bg-gray-900 rounded-lg p-6 mb-8">
             <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={chartData.data}>
+              <BarChart
+                data={chartData.data}
+                onClick={handleChartClick}
+                style={{ cursor: "pointer" }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                 <XAxis
                   dataKey="date"
@@ -357,9 +392,21 @@ export default function Home() {
             </ResponsiveContainer>
           </div>
 
-          <details className="bg-gray-900 rounded-lg p-4">
+          <details className="bg-gray-900 rounded-lg p-4" open={!!selectedDay}>
             <summary className="cursor-pointer font-medium text-gray-300">
-              Issues ({issues.length})
+              Issues ({filteredIssues.length}
+              {selectedDay ? ` on ${selectedDay}` : ""})
+              {selectedDay && (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setSelectedDay(null);
+                  }}
+                  className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
+                >
+                  clear filter
+                </button>
+              )}
             </summary>
             <table className="w-full mt-4 text-sm">
               <thead>
@@ -375,7 +422,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {issues.map((issue) => (
+                {filteredIssues.map((issue) => (
                   <tr key={issue.id} className="border-b border-gray-800/50">
                     <td className="py-1.5 pr-4">
                       <a
