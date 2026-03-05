@@ -79,6 +79,7 @@ export async function GET(req: NextRequest) {
       estimate: number | null;
       state: string;
       assignee: string | null;
+      project: string | null;
     }> = [];
 
     let hasMore = true;
@@ -92,8 +93,11 @@ export async function GET(req: NextRequest) {
       });
 
       for (const issue of issues.nodes) {
-        const state = await issue.state;
-        const assignee = await issue.assignee;
+        const [state, assignee, project] = await Promise.all([
+          issue.state,
+          issue.assignee,
+          issue.project,
+        ]);
         allIssues.push({
           id: issue.id,
           identifier: issue.identifier,
@@ -105,6 +109,7 @@ export async function GET(req: NextRequest) {
           estimate: issue.estimate ?? null,
           state: state?.type ?? "unknown",
           assignee: assignee?.name ?? null,
+          project: project?.name ?? null,
         });
       }
 

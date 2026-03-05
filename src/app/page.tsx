@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -25,73 +25,105 @@ type Issue = {
   estimate: number | null;
   state: string;
   assignee: string | null;
+  project: string | null;
 };
 
-type ChartPoint = {
-  date: string;
-  scope: number;
-  remaining: number;
-  ideal: number;
-};
+type ViewMode = "created" | "burndown" | "closed";
+type ColorMode = "none" | "project" | "assignee";
 
-function buildBurndown(issues: Issue[]): ChartPoint[] {
-  if (issues.length === 0) return [];
+const COLORS = [
+  "#60A5FA", "#F87171", "#34D399", "#FBBF24", "#A78BFA",
+  "#F472B6", "#38BDF8", "#FB923C", "#4ADE80", "#E879F9",
+  "#2DD4BF", "#FCA5A1", "#818CF8", "#FDE047", "#67E8F9",
+];
 
-  const allDates = issues.map((i) => new Date(i.createdAt).getTime());
-  const completionDates = issues
+function colorKey(issue: Issue, colorBy: ColorMode): string {
+  if (colorBy === "project") return issue.project ?? "No Project";
+  if (colorBy === "assignee") return issue.assignee ?? "Unassigned";
+  return "Issues";
+}
+
+function buildChartData(
+  issues: Issue[],
+  view: ViewMode,
+  colorBy: ColorMode,
+  startDate: string,
+  endDate: string,
+): { data: Record<string, string | number>[]; keys: string[] } {
+  if (issues.length === 0) return { data: [], keys: [] };
+
+  const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
+  const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
+  const k = (i: Issue) => colorKey(i, colorBy);
+
+  const createdDates = issues.map((i) => i.createdAt.split("T")[0]);
+  const doneDates = issues
     .filter((i) => i.completedAt || i.canceledAt)
-    .map((i) => new Date((i.completedAt ?? i.canceledAt)!).getTime());
+    .map((i) => (i.completedAt ?? i.canceledAt)!.split("T")[0]);
+  const today = new Date().toISOString().split("T")[0];
 
-  const start = new Date(Math.min(...allDates));
-  const end =
-    completionDates.length > 0
-      ? new Date(Math.max(Date.now(), ...completionDates))
-      : new Date();
+  const minDate = startDate || createdDates.sort()[0];
+  const maxDate =
+    endDate || [...createdDates, ...doneDates, today].sort().pop()!;
 
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
+  const days: string[] = [];
+  const cur = new Date(minDate + "T00:00:00");
+  const end = new Date(maxDate + "T00:00:00");
+  while (cur <= end) {
+    days.push(cur.toISOString().split("T")[0]);
+    cur.setDate(cur.getDate() + 1);
+  }
 
-  const useEstimates = issues.some((i) => i.estimate != null && i.estimate > 0);
-  const weight = (i: Issue) => (useEstimates ? (i.estimate ?? 1) : 1);
+  const allKeys = new Set<string>();
+  issues.forEach((i) => allKeys.add(k(i)));
+  const keys = [...allKeys].sort();
 
-  const points: ChartPoint[] = [];
-  const dayMs = 86400000;
-  const totalDays = Math.max(
-    1,
-    Math.ceil((end.getTime() - start.getTime()) / dayMs)
-  );
-  const finalScope = issues.reduce((s, i) => s + weight(i), 0);
+  const data: Record<string, string | number>[] = [];
 
-  const step = Math.max(1, Math.floor(totalDays / 90));
+  for (const day of days) {
+    const point: Record<string, string | number> = { date: day };
+    keys.forEach((key) => (point[key] = 0));
 
-  for (let d = 0; d <= totalDays; d += step) {
-    const current = new Date(start.getTime() + d * dayMs);
-    const currentEnd = current.getTime() + dayMs;
-
-    let scope = 0;
-    let completed = 0;
-    for (const issue of issues) {
-      if (new Date(issue.createdAt).getTime() < currentEnd) {
-        scope += weight(issue);
+    if (view === "created") {
+      for (const issue of issues) {
+        if (issue.createdAt.split("T")[0] === day) {
+          point[k(issue)] = (point[k(issue)] as number) + w(issue);
+        }
       }
-      const doneAt = issue.completedAt ?? issue.canceledAt;
-      if (doneAt && new Date(doneAt).getTime() < currentEnd) {
-        completed += weight(issue);
+    } else if (view === "closed") {
+      for (const issue of issues) {
+        const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+        if (doneDate === day) {
+          point[k(issue)] = (point[k(issue)] as number) + w(issue);
+        }
+      }
+    } else {
+      for (const issue of issues) {
+        const created = issue.createdAt.split("T")[0];
+        const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+        if (created <= day && (!doneDate || doneDate > day)) {
+          point[k(issue)] = (point[k(issue)] as number) + w(issue);
+        }
       }
     }
 
-    const ideal = finalScope * (d / totalDays);
-
-    points.push({
-      date: current.toISOString().split("T")[0],
-      scope,
-      remaining: scope - completed,
-      ideal: Math.round((finalScope - ideal) * 10) / 10,
-    });
+    data.push(point);
   }
 
-  return points;
+  return { data, keys };
 }
+
+const VIEW_LABELS: Record<ViewMode, string> = {
+  created: "Created",
+  burndown: "Burndown",
+  closed: "Closed / Day",
+};
+
+const COLOR_LABELS: Record<ColorMode, string> = {
+  none: "None",
+  project: "Project",
+  assignee: "Assignee",
+};
 
 export default function Home() {
   const [teams, setTeams] = useState<Option[]>([]);
@@ -103,18 +135,20 @@ export default function Home() {
   const [selectedLabel, setSelectedLabel] = useState("");
 
   const [issues, setIssues] = useState<Issue[]>([]);
-  const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Load teams on mount
+  const [viewMode, setViewMode] = useState<ViewMode>("burndown");
+  const [colorMode, setColorMode] = useState<ColorMode>("none");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
   useEffect(() => {
     fetch("/api/linear?action=teams")
       .then((r) => r.json())
       .then(setTeams);
   }, []);
 
-  // Load projects and labels when team changes
   useEffect(() => {
     setSelectedProject("");
     setSelectedLabel("");
@@ -125,10 +159,10 @@ export default function Home() {
     }
     Promise.all([
       fetch(`/api/linear?action=projects&teamId=${selectedTeam}`).then((r) =>
-        r.json()
+        r.json(),
       ),
       fetch(`/api/linear?action=labels&teamId=${selectedTeam}`).then((r) =>
-        r.json()
+        r.json(),
       ),
     ]).then(([p, l]) => {
       setProjects(p);
@@ -144,7 +178,10 @@ export default function Home() {
     setError("");
     setLoading(true);
 
-    const params = new URLSearchParams({ action: "issues", teamId: selectedTeam });
+    const params = new URLSearchParams({
+      action: "issues",
+      teamId: selectedTeam,
+    });
     if (selectedProject) params.set("projectId", selectedProject);
     if (selectedLabel) params.set("labelId", selectedLabel);
 
@@ -153,7 +190,6 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setIssues(data);
-      setChartData(buildBurndown(data));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to fetch issues");
     } finally {
@@ -161,9 +197,14 @@ export default function Home() {
     }
   }, [selectedTeam, selectedProject, selectedLabel]);
 
+  const chartData = useMemo(
+    () => buildChartData(issues, viewMode, colorMode, startDate, endDate),
+    [issues, viewMode, colorMode, startDate, endDate],
+  );
+
   const totalScope = issues.length;
   const completedCount = issues.filter(
-    (i) => i.state === "completed" || i.state === "canceled"
+    (i) => i.state === "completed" || i.state === "canceled",
   ).length;
   const pctDone =
     totalScope > 0 ? Math.round((completedCount / totalScope) * 100) : 0;
@@ -172,7 +213,8 @@ export default function Home() {
     <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
       <h1 className="text-3xl font-bold mb-8">Linear Burn Rate</h1>
 
-      <div className="flex flex-wrap gap-4 mb-6">
+      {/* Filters row */}
+      <div className="flex flex-wrap gap-4 mb-4">
         <Select
           label="Team"
           options={teams}
@@ -207,8 +249,32 @@ export default function Home() {
 
       {error && <p className="text-red-400 mb-4">{error}</p>}
 
-      {chartData.length > 0 && (
+      {issues.length > 0 && (
         <>
+          {/* Controls row */}
+          <div className="flex flex-wrap items-end gap-4 mb-6">
+            <DateInput
+              label="Start"
+              value={startDate}
+              onChange={setStartDate}
+            />
+            <DateInput label="End" value={endDate} onChange={setEndDate} />
+
+            <ToggleGroup
+              label="View"
+              options={VIEW_LABELS}
+              value={viewMode}
+              onChange={setViewMode}
+            />
+            <ToggleGroup
+              label="Color by"
+              options={COLOR_LABELS}
+              value={colorMode}
+              onChange={setColorMode}
+            />
+          </div>
+
+          {/* Stats */}
           <div className="flex gap-8 mb-6 text-sm">
             <Stat label="Total Issues" value={totalScope} />
             <Stat label="Completed" value={completedCount} />
@@ -216,9 +282,10 @@ export default function Home() {
             <Stat label="Progress" value={`${pctDone}%`} />
           </div>
 
+          {/* Chart */}
           <div className="bg-gray-900 rounded-lg p-6 mb-8">
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={chartData}>
+              <BarChart data={chartData.data}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                 <XAxis
                   dataKey="date"
@@ -235,36 +302,19 @@ export default function Home() {
                   }}
                 />
                 <Legend />
-                <Line
-                  type="stepAfter"
-                  dataKey="scope"
-                  stroke="#60A5FA"
-                  strokeWidth={1}
-                  strokeDasharray="4 2"
-                  dot={false}
-                  name="Scope"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="remaining"
-                  stroke="#F87171"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Remaining"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="ideal"
-                  stroke="#6B7280"
-                  strokeWidth={1}
-                  strokeDasharray="5 5"
-                  dot={false}
-                  name="Ideal"
-                />
-              </LineChart>
+                {chartData.keys.map((key, i) => (
+                  <Bar
+                    key={key}
+                    dataKey={key}
+                    stackId="a"
+                    fill={COLORS[i % COLORS.length]}
+                  />
+                ))}
+              </BarChart>
             </ResponsiveContainer>
           </div>
 
+          {/* Issue table */}
           <details className="bg-gray-900 rounded-lg p-4">
             <summary className="cursor-pointer font-medium text-gray-300">
               Issues ({issues.length})
@@ -274,6 +324,7 @@ export default function Home() {
                 <tr className="text-left text-gray-400 border-b border-gray-800">
                   <th className="pb-2">ID</th>
                   <th className="pb-2">Title</th>
+                  <th className="pb-2">Project</th>
                   <th className="pb-2">Assignee</th>
                   <th className="pb-2">State</th>
                   <th className="pb-2">Est</th>
@@ -303,6 +354,9 @@ export default function Home() {
                       >
                         {issue.title}
                       </a>
+                    </td>
+                    <td className="py-1.5 pr-4 text-gray-400">
+                      {issue.project ?? "-"}
                     </td>
                     <td className="py-1.5 pr-4 text-gray-400">
                       {issue.assignee ?? "-"}
@@ -338,6 +392,8 @@ export default function Home() {
   );
 }
 
+/* ---- UI Components ---- */
+
 function Select({
   label,
   options,
@@ -366,6 +422,61 @@ function Select({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+function DateInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs text-gray-400">{label}</label>
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
+      />
+    </div>
+  );
+}
+
+function ToggleGroup<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Record<T, string>;
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs text-gray-400">{label}</label>
+      <div className="flex rounded overflow-hidden border border-gray-700">
+        {(Object.entries(options) as [T, string][]).map(([k, v]) => (
+          <button
+            key={k}
+            onClick={() => onChange(k)}
+            className={`px-3 py-2 text-sm transition ${
+              k === value
+                ? "bg-indigo-600 text-white"
+                : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
