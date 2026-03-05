@@ -77,7 +77,8 @@ export async function GET(req: NextRequest) {
       completedAt: string | null;
       canceledAt: string | null;
       estimate: number | null;
-      state: string;
+      stateType: string;
+      stateName: string;
       assignee: string | null;
       project: string | null;
     }> = [];
@@ -107,7 +108,8 @@ export async function GET(req: NextRequest) {
           completedAt: issue.completedAt?.toISOString() ?? null,
           canceledAt: issue.canceledAt?.toISOString() ?? null,
           estimate: issue.estimate ?? null,
-          state: state?.type ?? "unknown",
+          stateType: state?.type ?? "unknown",
+          stateName: state?.name ?? "Unknown",
           assignee: assignee?.name ?? null,
           project: project?.name ?? null,
         });

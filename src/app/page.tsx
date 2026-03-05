@@ -23,13 +23,14 @@ type Issue = {
   completedAt: string | null;
   canceledAt: string | null;
   estimate: number | null;
-  state: string;
+  stateType: string;
+  stateName: string;
   assignee: string | null;
   project: string | null;
 };
 
-type ViewMode = "created" | "burndown" | "closed";
-type ColorMode = "none" | "project" | "assignee";
+type ViewMode = "created" | "active" | "burndown" | "closed";
+type ColorMode = "none" | "project" | "assignee" | "status";
 
 const COLORS = [
   "#60A5FA", "#F87171", "#34D399", "#FBBF24", "#A78BFA",
@@ -37,9 +38,10 @@ const COLORS = [
   "#2DD4BF", "#FCA5A1", "#818CF8", "#FDE047", "#67E8F9",
 ];
 
-function colorKey(issue: Issue, colorBy: ColorMode): string {
+function getColorKey(issue: Issue, colorBy: ColorMode): string {
   if (colorBy === "project") return issue.project ?? "No Project";
   if (colorBy === "assignee") return issue.assignee ?? "Unassigned";
+  if (colorBy === "status") return issue.stateName;
   return "Issues";
 }
 
@@ -54,7 +56,7 @@ function buildChartData(
 
   const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
   const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
-  const k = (i: Issue) => colorKey(i, colorBy);
+  const k = (i: Issue) => getColorKey(i, colorBy);
 
   const createdDates = issues.map((i) => i.createdAt.split("T")[0]);
   const doneDates = issues
@@ -97,13 +99,48 @@ function buildChartData(
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
       }
-    } else {
+    } else if (view === "active") {
+      // Active issues on each day: created on or before, not yet done
       for (const issue of issues) {
         const created = issue.createdAt.split("T")[0];
         const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
         if (created <= day && (!doneDate || doneDate > day)) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
+      }
+    } else {
+      // Burndown: total scope fixed from day 1, minus cumulative completions
+      const totalScope = issues.reduce((s, i) => s + w(i), 0);
+      // For color mode, we need per-group remaining
+      // Each group starts with its full count and decreases
+      if (colorBy === "none") {
+        let completed = 0;
+        for (const issue of issues) {
+          const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+          if (doneDate && doneDate <= day) {
+            completed += w(issue);
+          }
+        }
+        point["Issues"] = totalScope - completed;
+      } else {
+        // Per-group: each group's total minus its completions
+        const groupTotals: Record<string, number> = {};
+        const groupCompleted: Record<string, number> = {};
+        keys.forEach((key) => {
+          groupTotals[key] = 0;
+          groupCompleted[key] = 0;
+        });
+        for (const issue of issues) {
+          const g = k(issue);
+          groupTotals[g] += w(issue);
+          const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+          if (doneDate && doneDate <= day) {
+            groupCompleted[g] += w(issue);
+          }
+        }
+        keys.forEach((key) => {
+          point[key] = groupTotals[key] - groupCompleted[key];
+        });
       }
     }
 
@@ -115,6 +152,7 @@ function buildChartData(
 
 const VIEW_LABELS: Record<ViewMode, string> = {
   created: "Created",
+  active: "Active",
   burndown: "Burndown",
   closed: "Closed / Day",
 };
@@ -123,6 +161,7 @@ const COLOR_LABELS: Record<ColorMode, string> = {
   none: "None",
   project: "Project",
   assignee: "Assignee",
+  status: "Status",
 };
 
 export default function Home() {
@@ -204,7 +243,7 @@ export default function Home() {
 
   const totalScope = issues.length;
   const completedCount = issues.filter(
-    (i) => i.state === "completed" || i.state === "canceled",
+    (i) => i.stateType === "completed" || i.stateType === "canceled",
   ).length;
   const pctDone =
     totalScope > 0 ? Math.round((completedCount / totalScope) * 100) : 0;
@@ -213,7 +252,6 @@ export default function Home() {
     <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
       <h1 className="text-3xl font-bold mb-8">Linear Burn Rate</h1>
 
-      {/* Filters row */}
       <div className="flex flex-wrap gap-4 mb-4">
         <Select
           label="Team"
@@ -251,7 +289,6 @@ export default function Home() {
 
       {issues.length > 0 && (
         <>
-          {/* Controls row */}
           <div className="flex flex-wrap items-end gap-4 mb-6">
             <DateInput
               label="Start"
@@ -274,7 +311,6 @@ export default function Home() {
             />
           </div>
 
-          {/* Stats */}
           <div className="flex gap-8 mb-6 text-sm">
             <Stat label="Total Issues" value={totalScope} />
             <Stat label="Completed" value={completedCount} />
@@ -282,7 +318,6 @@ export default function Home() {
             <Stat label="Progress" value={`${pctDone}%`} />
           </div>
 
-          {/* Chart */}
           <div className="bg-gray-900 rounded-lg p-6 mb-8">
             <ResponsiveContainer width="100%" height={400}>
               <BarChart data={chartData.data}>
@@ -314,7 +349,6 @@ export default function Home() {
             </ResponsiveContainer>
           </div>
 
-          {/* Issue table */}
           <details className="bg-gray-900 rounded-lg p-4">
             <summary className="cursor-pointer font-medium text-gray-300">
               Issues ({issues.length})
@@ -364,14 +398,14 @@ export default function Home() {
                     <td className="py-1.5 pr-4">
                       <span
                         className={`px-2 py-0.5 rounded text-xs ${
-                          issue.state === "completed"
+                          issue.stateType === "completed"
                             ? "bg-green-900/50 text-green-300"
-                            : issue.state === "canceled"
+                            : issue.stateType === "canceled"
                               ? "bg-gray-800 text-gray-400"
                               : "bg-yellow-900/50 text-yellow-300"
                         }`}
                       >
-                        {issue.state}
+                        {issue.stateName}
                       </span>
                     </td>
                     <td className="py-1.5 pr-4">{issue.estimate ?? "-"}</td>
@@ -391,8 +425,6 @@ export default function Home() {
     </main>
   );
 }
-
-/* ---- UI Components ---- */
 
 function Select({
   label,
