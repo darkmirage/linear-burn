@@ -183,7 +183,11 @@ export default function Home() {
 
   const [viewMode, setViewMode] = useState<ViewMode>("burndown");
   const [colorMode, setColorMode] = useState<ColorMode>("none");
-  const [startDate, setStartDate] = useState("");
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.toISOString().split("T")[0];
+  });
   const [endDate, setEndDate] = useState("");
 
   useEffect(() => {
