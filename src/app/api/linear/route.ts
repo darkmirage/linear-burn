@@ -161,7 +161,7 @@ export async function GET(req: NextRequest) {
       variables.teamId = teamId;
     }
     const filterStr = filterFields.length ? `filter: { ${filterFields.join(", ")} }` : "";
-    const varDefs = Object.keys(variables).map((k) => `$${k}: String!`).join(", ");
+    const varDefs = Object.keys(variables).map((k) => `$${k}: ID!`).join(", ");
     const varDefsStr = varDefs ? `(${varDefs})` : "";
 
     const allIssues: IssueData[] = [];
