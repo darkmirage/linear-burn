@@ -117,58 +117,71 @@ export async function GET(req: NextRequest) {
         let loaded = 0;
         let hasMore = true;
         let cursor: string | undefined;
+        let completed = false;
 
-        while (hasMore) {
-          const page = await linear.issues({
-            first: 100,
-            after: cursor,
-            filter,
-          });
+        try {
+          while (hasMore) {
+            const page = await linear.issues({
+              first: 100,
+              after: cursor,
+              filter,
+            });
 
-          hasMore = page.pageInfo.hasNextPage;
-          cursor = page.pageInfo.endCursor ?? undefined;
-          const nodes = page.nodes;
+            hasMore = page.pageInfo.hasNextPage;
+            cursor = page.pageInfo.endCursor ?? undefined;
+            const nodes = page.nodes;
 
-          for (let i = 0; i < nodes.length; i += BATCH_SIZE) {
-            const slice = nodes.slice(i, i + BATCH_SIZE);
-            const issues = await Promise.all(
-              slice.map(async (issue) => {
-                const [state, assignee, project] = await Promise.all([
-                  issue.state,
-                  issue.assignee,
-                  issue.project,
-                ]);
-                return {
-                  id: issue.id,
-                  identifier: issue.identifier,
-                  title: issue.title,
-                  url: issue.url,
-                  createdAt: issue.createdAt.toISOString(),
-                  completedAt: issue.completedAt?.toISOString() ?? null,
-                  canceledAt: issue.canceledAt?.toISOString() ?? null,
-                  estimate: issue.estimate ?? null,
-                  stateType: state?.type ?? "unknown",
-                  stateName: state?.name ?? "Unknown",
-                  assignee: assignee?.name ?? null,
-                  project: project?.name ?? null,
-                  priority: issue.priority,
-                  priorityLabel: issue.priorityLabel,
-                };
-              })
-            );
+            for (let i = 0; i < nodes.length; i += BATCH_SIZE) {
+              const slice = nodes.slice(i, i + BATCH_SIZE);
+              const issues = await Promise.all(
+                slice.map(async (issue) => {
+                  const issueCacheKey = `issue:${issue.id}`;
+                  const cachedIssue = getCached<IssueData>(issueCacheKey);
+                  if (cachedIssue) return cachedIssue;
 
-            allIssues.push(...issues);
-            loaded += issues.length;
-            const done = !hasMore && i + BATCH_SIZE >= nodes.length;
+                  const [state, assignee, project] = await Promise.all([
+                    issue.state,
+                    issue.assignee,
+                    issue.project,
+                  ]);
+                  const data: IssueData = {
+                    id: issue.id,
+                    identifier: issue.identifier,
+                    title: issue.title,
+                    url: issue.url,
+                    createdAt: issue.createdAt.toISOString(),
+                    completedAt: issue.completedAt?.toISOString() ?? null,
+                    canceledAt: issue.canceledAt?.toISOString() ?? null,
+                    estimate: issue.estimate ?? null,
+                    stateType: state?.type ?? "unknown",
+                    stateName: state?.name ?? "Unknown",
+                    assignee: assignee?.name ?? null,
+                    project: project?.name ?? null,
+                    priority: issue.priority,
+                    priorityLabel: issue.priorityLabel,
+                  };
+                  setCache(issueCacheKey, data, CACHE_TTL_ISSUES);
+                  return data;
+                })
+              );
 
-            controller.enqueue(
-              encoder.encode(JSON.stringify({ loaded, hasMore: !done, issues }) + "\n")
-            );
+              allIssues.push(...issues);
+              loaded += issues.length;
+              const done = !hasMore && i + BATCH_SIZE >= nodes.length;
+
+              controller.enqueue(
+                encoder.encode(JSON.stringify({ loaded, hasMore: !done, issues }) + "\n")
+              );
+            }
           }
+          completed = true;
+        } finally {
+          // Only cache the full list if we loaded everything successfully
+          if (completed) {
+            setCache(cacheKey, allIssues, CACHE_TTL_ISSUES);
+          }
+          controller.close();
         }
-
-        setCache(cacheKey, allIssues, CACHE_TTL_ISSUES);
-        controller.close();
       },
     });
 
