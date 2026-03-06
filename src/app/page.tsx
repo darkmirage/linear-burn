@@ -334,7 +334,7 @@ export default function Home() {
     if (searchText) {
       const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
       result = result.filter((issue) => {
-        const haystack = `${issue.identifier} ${issue.title} ${issue.assignee ?? ""} ${issue.project ?? ""} ${issue.stateName} ${issue.priorityLabel}`.toLowerCase();
+        const haystack = `${issue.identifier} ${issue.title}`.toLowerCase();
         return terms.every((term) => haystack.includes(term));
       });
     }
