@@ -206,8 +206,13 @@ export default function Home() {
     try {
       const res = await fetch(`/api/linear?${params}`);
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error);
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          throw new Error(data.error);
+        } catch {
+          throw new Error(`Server error (${res.status})`);
+        }
       }
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
@@ -239,12 +244,16 @@ export default function Home() {
 
   useEffect(() => {
     fetch("/api/linear?action=teams")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Teams fetch failed (${r.status})`);
+        return r.json();
+      })
       .then((data: Option[]) => {
         setTeams(data);
         const pe = data.find((t) => t.name === "Product Engineering");
         if (pe) setSelectedTeam(pe.id);
-      });
+      })
+      .catch((e) => setError(e.message));
   }, []);
 
   useEffect(() => {
@@ -256,12 +265,14 @@ export default function Home() {
       return;
     }
     Promise.all([
-      fetch(`/api/linear?action=projects&teamId=${selectedTeam}`).then((r) =>
-        r.json(),
-      ),
-      fetch(`/api/linear?action=labels&teamId=${selectedTeam}`).then((r) =>
-        r.json(),
-      ),
+      fetch(`/api/linear?action=projects&teamId=${selectedTeam}`).then((r) => {
+        if (!r.ok) throw new Error(`Projects fetch failed (${r.status})`);
+        return r.json();
+      }),
+      fetch(`/api/linear?action=labels&teamId=${selectedTeam}`).then((r) => {
+        if (!r.ok) throw new Error(`Labels fetch failed (${r.status})`);
+        return r.json();
+      }),
     ]).then(([p, l]: [Option[], Option[]]) => {
       setProjects(p);
       setLabels(l);
@@ -273,7 +284,7 @@ export default function Home() {
         if (ga) params.set("labelId", ga.id);
         streamIssues(params);
       }
-    });
+    }).catch((e) => setError(e.message));
   }, [selectedTeam]);
 
   const fetchIssues = useCallback(async () => {
