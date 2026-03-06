@@ -35,6 +35,19 @@ type Issue = {
   priorityLabel: string;
 };
 
+function toLocalDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function todayLocal(): string {
+  return toLocalDate(new Date().toISOString());
+}
+
+function formatLocalDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 type ViewMode = "created" | "active" | "burndown" | "closed" | "cfd";
 type ColorMode = "none" | "project" | "assignee" | "status" | "priority";
 
@@ -62,20 +75,20 @@ const CFD_COLORS: Record<string, string> = {
 };
 
 function getDateRange(issues: Issue[], startDate: string, endDate: string) {
-  const createdDates = issues.map((i) => i.createdAt.split("T")[0]);
+  const createdDates = issues.map((i) => toLocalDate(i.createdAt));
   const doneDates = issues
     .filter((i) => i.completedAt || i.canceledAt)
-    .map((i) => (i.completedAt ?? i.canceledAt)!.split("T")[0]);
-  const today = new Date().toISOString().split("T")[0];
+    .map((i) => toLocalDate((i.completedAt ?? i.canceledAt)!));
+  const today = todayLocal();
 
   const minDate = startDate || createdDates.sort()[0];
   const maxDate = endDate || [...createdDates, ...doneDates, today].sort().pop()!;
 
   const days: string[] = [];
-  const cur = new Date(minDate + "T00:00:00");
-  const end = new Date(maxDate + "T00:00:00");
+  const cur = new Date(minDate + "T12:00:00");
+  const end = new Date(maxDate + "T12:00:00");
   while (cur <= end) {
-    days.push(cur.toISOString().split("T")[0]);
+    days.push(formatLocalDate(cur));
     cur.setDate(cur.getDate() + 1);
   }
   return days;
@@ -93,7 +106,7 @@ function applyProjection(
   keys: string[],
   days: string[],
 ): string | undefined {
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayLocal();
   const todayIdx = days.indexOf(today);
   if (todayIdx < 1 || todayIdx >= days.length - 1) return undefined;
 
@@ -145,9 +158,11 @@ function buildCfdData(
     keys.forEach((key) => (point[key] = 0));
 
     for (const issue of issues) {
-      const created = issue.createdAt.split("T")[0];
+      const created = toLocalDate(issue.createdAt);
       if (created > day) continue;
-      const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+      const doneDate = issue.completedAt ?? issue.canceledAt
+        ? toLocalDate((issue.completedAt ?? issue.canceledAt)!)
+        : undefined;
 
       let status: string;
       if (doneDate && doneDate <= day) {
@@ -225,21 +240,22 @@ function buildChartData(
 
     if (view === "created") {
       for (const issue of issues) {
-        if (issue.createdAt.split("T")[0] === day) {
+        if (toLocalDate(issue.createdAt) === day) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
       }
     } else if (view === "closed") {
       for (const issue of issues) {
-        const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
-        if (doneDate === day) {
+        const done = issue.completedAt ?? issue.canceledAt;
+        if (done && toLocalDate(done) === day) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
       }
     } else if (view === "active") {
       for (const issue of issues) {
-        const created = issue.createdAt.split("T")[0];
-        const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+        const created = toLocalDate(issue.createdAt);
+        const done = issue.completedAt ?? issue.canceledAt;
+        const doneDate = done ? toLocalDate(done) : undefined;
         if (created <= day && (!doneDate || doneDate > day)) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
@@ -250,8 +266,8 @@ function buildChartData(
       if (colorBy === "none") {
         let completed = 0;
         for (const issue of issues) {
-          const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
-          if (doneDate && doneDate <= day) {
+          const done = issue.completedAt ?? issue.canceledAt;
+          if (done && toLocalDate(done) <= day) {
             completed += w(issue);
           }
         }
@@ -266,8 +282,8 @@ function buildChartData(
         for (const issue of issues) {
           const g = k(issue);
           groupTotals[g] += w(issue);
-          const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
-          if (doneDate && doneDate <= day) {
+          const done = issue.completedAt ?? issue.canceledAt;
+          if (done && toLocalDate(done) <= day) {
             groupCompleted[g] += w(issue);
           }
         }
@@ -321,12 +337,12 @@ export default function Home() {
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
-    return d.toISOString().split("T")[0];
+    return formatLocalDate(d);
   });
   const [endDate, setEndDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
-    return d.toISOString().split("T")[0];
+    return formatLocalDate(d);
   });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
@@ -467,8 +483,9 @@ export default function Home() {
   const filteredIssues = useMemo(() => {
     if (!selectedDay) return displayIssues;
     return displayIssues.filter((issue) => {
-      const created = issue.createdAt.split("T")[0];
-      const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+      const created = toLocalDate(issue.createdAt);
+      const done = issue.completedAt ?? issue.canceledAt;
+      const doneDate = done ? toLocalDate(done) : undefined;
       if (viewMode === "created") {
         return created === selectedDay;
       } else if (viewMode === "closed") {
@@ -859,10 +876,10 @@ export default function Home() {
                     <td className="py-1.5 pr-4">{issue.estimate ?? "-"}</td>
                     <td className="py-1.5 pr-4 text-gray-400">{issue.priorityLabel}</td>
                     <td className="py-1.5 pr-4">
-                      {issue.createdAt.split("T")[0]}
+                      {toLocalDate(issue.createdAt)}
                     </td>
                     <td className="py-1.5">
-                      {issue.completedAt?.split("T")[0] ?? "-"}
+                      {issue.completedAt ? toLocalDate(issue.completedAt) : "-"}
                     </td>
                   </tr>
                 ))}
