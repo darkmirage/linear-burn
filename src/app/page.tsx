@@ -168,16 +168,27 @@ function applyProjection(
   const lookback = Math.min(7, todayIdx);
   const refIdx = todayIdx - lookback;
 
-  const rates: Record<string, number> = {};
+  // Compute aggregate rate across all keys so the total is consistent
+  // regardless of how many keys (color groups) there are.
+  let totalNow = 0, totalRef = 0;
   for (const key of keys) {
-    rates[key] = ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+    totalNow += data[todayIdx][key] as number;
+    totalRef += data[refIdx][key] as number;
+  }
+  const aggRate = (totalNow - totalRef) / lookback;
+
+  // Each key's share of the current total (for proportional distribution)
+  const shares: Record<string, number> = {};
+  for (const key of keys) {
+    shares[key] = totalNow > 0 ? (data[todayIdx][key] as number) / totalNow : 1 / keys.length;
   }
 
   for (let i = todayIdx + 1; i < data.length; i++) {
     const ahead = i - todayIdx;
     data[i]._projected = 1;
+    const projectedTotal = Math.max(0, totalNow + aggRate * ahead);
     for (const key of keys) {
-      data[i][key] = Math.max(0, Math.round((data[todayIdx][key] as number) + rates[key] * ahead));
+      data[i][key] = Math.max(0, Math.round(projectedTotal * shares[key]));
     }
   }
 
