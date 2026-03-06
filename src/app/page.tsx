@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   BarChart,
   Bar,
@@ -190,11 +190,18 @@ export default function Home() {
   });
   const [endDate, setEndDate] = useState("");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [hideBacklog, setHideBacklog] = useState(true);
+
+  const initialLoadDone = useRef(false);
 
   useEffect(() => {
     fetch("/api/linear?action=teams")
       .then((r) => r.json())
-      .then(setTeams);
+      .then((data: Option[]) => {
+        setTeams(data);
+        const pe = data.find((t) => t.name === "Product Engineering");
+        if (pe) setSelectedTeam(pe.id);
+      });
   }, []);
 
   useEffect(() => {
@@ -212,9 +219,23 @@ export default function Home() {
       fetch(`/api/linear?action=labels&teamId=${selectedTeam}`).then((r) =>
         r.json(),
       ),
-    ]).then(([p, l]) => {
+    ]).then(([p, l]: [Option[], Option[]]) => {
       setProjects(p);
       setLabels(l);
+      if (!initialLoadDone.current) {
+        initialLoadDone.current = true;
+        const ga = l.find((lb) => lb.name === "GA");
+        if (ga) setSelectedLabel(ga.id);
+        // Auto-fetch with defaults
+        const params = new URLSearchParams({ action: "issues", teamId: selectedTeam });
+        if (ga) params.set("labelId", ga.id);
+        setLoading(true);
+        fetch(`/api/linear?${params}`)
+          .then((r) => r.json())
+          .then((data) => setIssues(data))
+          .catch(() => setError("Failed to fetch issues"))
+          .finally(() => setLoading(false));
+      }
     });
   }, [selectedTeam]);
 
@@ -245,9 +266,14 @@ export default function Home() {
     }
   }, [selectedTeam, selectedProject, selectedLabel]);
 
+  const displayIssues = useMemo(
+    () => (hideBacklog ? issues.filter((i) => i.stateType !== "backlog") : issues),
+    [issues, hideBacklog],
+  );
+
   const chartData = useMemo(
-    () => buildChartData(issues, viewMode, colorMode, startDate, endDate),
-    [issues, viewMode, colorMode, startDate, endDate],
+    () => buildChartData(displayIssues, viewMode, colorMode, startDate, endDate),
+    [displayIssues, viewMode, colorMode, startDate, endDate],
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -260,8 +286,8 @@ export default function Home() {
   };
 
   const filteredIssues = useMemo(() => {
-    if (!selectedDay) return issues;
-    return issues.filter((issue) => {
+    if (!selectedDay) return displayIssues;
+    return displayIssues.filter((issue) => {
       const created = issue.createdAt.split("T")[0];
       const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
       if (viewMode === "created") {
@@ -275,10 +301,10 @@ export default function Home() {
         return !doneDate || doneDate > selectedDay;
       }
     });
-  }, [issues, selectedDay, viewMode]);
+  }, [displayIssues, selectedDay, viewMode]);
 
-  const totalScope = issues.length;
-  const completedCount = issues.filter(
+  const totalScope = displayIssues.length;
+  const completedCount = displayIssues.filter(
     (i) => i.stateType === "completed" || i.stateType === "canceled",
   ).length;
   const pctDone =
@@ -348,6 +374,19 @@ export default function Home() {
               value={colorMode}
               onChange={setColorMode}
             />
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-gray-400">Backlog</label>
+              <button
+                onClick={() => setHideBacklog((h) => !h)}
+                className={`px-3 py-2 text-sm rounded border transition ${
+                  hideBacklog
+                    ? "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                    : "border-indigo-500 bg-indigo-600 text-white"
+                }`}
+              >
+                {hideBacklog ? "Hidden" : "Shown"}
+              </button>
+            </div>
           </div>
 
           <div className="flex gap-8 mb-6 text-sm">
