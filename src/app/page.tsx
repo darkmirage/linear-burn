@@ -194,6 +194,8 @@ export default function Home() {
   const [hideBacklog, setHideBacklog] = useState(true);
   const [sortCol, setSortCol] = useState<keyof Issue>("priority");
   const [sortAsc, setSortAsc] = useState(true);
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
+  const [searchText, setSearchText] = useState("");
 
   const streamIssues = useCallback(async (params: URLSearchParams) => {
     setError("");
@@ -322,11 +324,28 @@ export default function Home() {
     });
   }, [displayIssues, selectedDay, viewMode]);
 
+  const tableFilteredIssues = useMemo(() => {
+    let result = filteredIssues;
+    if (showActiveOnly) {
+      result = result.filter(
+        (i) => i.stateType !== "completed" && i.stateType !== "canceled",
+      );
+    }
+    if (searchText) {
+      const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
+      result = result.filter((issue) => {
+        const haystack = `${issue.identifier} ${issue.title} ${issue.assignee ?? ""} ${issue.project ?? ""} ${issue.stateName} ${issue.priorityLabel}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      });
+    }
+    return result;
+  }, [filteredIssues, showActiveOnly, searchText]);
+
   const sortedIssues = useMemo(() => {
     const STATE_ORDER: Record<string, number> = {
       backlog: 0, unstarted: 1, started: 2, completed: 3, canceled: 4,
     };
-    return [...filteredIssues].sort((a, b) => {
+    return [...tableFilteredIssues].sort((a, b) => {
       let av: string | number, bv: string | number;
       if (sortCol === "priority") {
         // Move "No priority" (0) to the end, otherwise sort by numeric value
@@ -342,7 +361,7 @@ export default function Home() {
       const cmp = av < bv ? -1 : av > bv ? 1 : 0;
       return sortAsc ? cmp : -cmp;
     });
-  }, [filteredIssues, sortCol, sortAsc]);
+  }, [tableFilteredIssues, sortCol, sortAsc]);
 
   const handleSort = (col: keyof Issue) => {
     if (sortCol === col) {
@@ -508,17 +527,38 @@ export default function Home() {
           </div>
 
           <div className="bg-gray-900 rounded-lg p-4">
-            <div className="font-medium text-gray-300 mb-4">
-              Issues ({sortedIssues.length}
-              {selectedDay ? ` on ${selectedDay}` : ""})
-              {selectedDay && (
+            <div className="flex flex-wrap items-center gap-4 mb-4">
+              <div className="font-medium text-gray-300">
+                Issues ({sortedIssues.length}
+                {selectedDay ? ` on ${selectedDay}` : ""})
+                {selectedDay && (
+                  <button
+                    onClick={() => setSelectedDay(null)}
+                    className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
+                  >
+                    clear filter
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3 ml-auto">
                 <button
-                  onClick={() => setSelectedDay(null)}
-                  className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
+                  onClick={() => setShowActiveOnly((v) => !v)}
+                  className={`px-3 py-1.5 text-xs rounded border transition ${
+                    showActiveOnly
+                      ? "border-indigo-500 bg-indigo-600 text-white"
+                      : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                  }`}
                 >
-                  clear filter
+                  Active only
                 </button>
-              )}
+                <input
+                  type="text"
+                  placeholder="Search issues..."
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm w-56 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
             <table className="w-full text-sm">
               <thead>
