@@ -219,6 +219,7 @@ export default function Home() {
       let buffer = "";
       const accumulated: Issue[] = [];
 
+      let streamDone = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -228,10 +229,16 @@ export default function Home() {
         for (const line of lines) {
           if (!line) continue;
           const chunk = JSON.parse(line);
+          if (chunk.error) throw new Error(chunk.error);
           accumulated.push(...chunk.issues);
           setIssues([...accumulated]);
-          setLoadProgress({ loaded: accumulated.length, done: !chunk.hasMore });
+          streamDone = !chunk.hasMore;
+          setLoadProgress({ loaded: accumulated.length, done: streamDone });
         }
+      }
+      if (!streamDone && accumulated.length > 0) {
+        setError("Stream ended unexpectedly — showing partial results");
+        setLoadProgress({ loaded: accumulated.length, done: true });
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to fetch issues");

@@ -175,6 +175,11 @@ export async function GET(req: NextRequest) {
             }
           }
           completed = true;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Unknown error";
+          controller.enqueue(
+            encoder.encode(JSON.stringify({ error: msg }) + "\n")
+          );
         } finally {
           // Only cache the full list if we loaded everything successfully
           if (completed) {
