@@ -179,6 +179,7 @@ export default function Home() {
 
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState({ loaded: 0, done: false });
   const [error, setError] = useState("");
 
   const [viewMode, setViewMode] = useState<ViewMode>("burndown");
@@ -191,6 +192,44 @@ export default function Home() {
   const [endDate, setEndDate] = useState("");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
+
+  const streamIssues = useCallback(async (params: URLSearchParams) => {
+    setError("");
+    setLoading(true);
+    setLoadProgress({ loaded: 0, done: false });
+    setIssues([]);
+
+    try {
+      const res = await fetch(`/api/linear?${params}`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error);
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const accumulated: Issue[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (!line) continue;
+          const chunk = JSON.parse(line);
+          accumulated.push(...chunk.issues);
+          setIssues([...accumulated]);
+          setLoadProgress({ loaded: accumulated.length, done: !chunk.hasMore });
+        }
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to fetch issues");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const initialLoadDone = useRef(false);
 
@@ -226,15 +265,9 @@ export default function Home() {
         initialLoadDone.current = true;
         const ga = l.find((lb) => lb.name === "GA");
         if (ga) setSelectedLabel(ga.id);
-        // Auto-fetch with defaults
         const params = new URLSearchParams({ action: "issues", teamId: selectedTeam });
         if (ga) params.set("labelId", ga.id);
-        setLoading(true);
-        fetch(`/api/linear?${params}`)
-          .then((r) => r.json())
-          .then((data) => setIssues(data))
-          .catch(() => setError("Failed to fetch issues"))
-          .finally(() => setLoading(false));
+        streamIssues(params);
       }
     });
   }, [selectedTeam]);
@@ -244,27 +277,11 @@ export default function Home() {
       setError("Select a team");
       return;
     }
-    setError("");
-    setLoading(true);
-
-    const params = new URLSearchParams({
-      action: "issues",
-      teamId: selectedTeam,
-    });
+    const params = new URLSearchParams({ action: "issues", teamId: selectedTeam });
     if (selectedProject) params.set("projectId", selectedProject);
     if (selectedLabel) params.set("labelId", selectedLabel);
-
-    try {
-      const res = await fetch(`/api/linear?${params}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setIssues(data);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to fetch issues");
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedTeam, selectedProject, selectedLabel]);
+    streamIssues(params);
+  }, [selectedTeam, selectedProject, selectedLabel, streamIssues]);
 
   const displayIssues = useMemo(
     () => (hideBacklog ? issues.filter((i) => i.stateType !== "backlog") : issues),
@@ -348,6 +365,22 @@ export default function Home() {
       </div>
 
       {error && <p className="text-red-400 mb-4">{error}</p>}
+
+      {loading && (
+        <div className="mb-4">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="text-sm text-gray-400">
+              Loading issues... {loadProgress.loaded} fetched
+            </div>
+          </div>
+          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 rounded-full transition-all duration-300 ease-out animate-pulse"
+              style={{ width: loadProgress.loaded > 0 ? "100%" : "30%" }}
+            />
+          </div>
+        </div>
+      )}
 
       {issues.length > 0 && (
         <>

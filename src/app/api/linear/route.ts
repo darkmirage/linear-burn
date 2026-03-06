@@ -68,62 +68,61 @@ export async function GET(req: NextRequest) {
     if (labelId) filter.labels = { some: { id: { eq: labelId } } };
     if (teamId) filter.team = { id: { eq: teamId } };
 
-    const allIssues: Array<{
-      id: string;
-      identifier: string;
-      title: string;
-      url: string;
-      createdAt: string;
-      completedAt: string | null;
-      canceledAt: string | null;
-      estimate: number | null;
-      stateType: string;
-      stateName: string;
-      assignee: string | null;
-      project: string | null;
-      priority: number;
-      priorityLabel: string;
-    }> = [];
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        let loaded = 0;
+        let hasMore = true;
+        let cursor: string | undefined;
 
-    let hasMore = true;
-    let cursor: string | undefined;
+        while (hasMore) {
+          const issues = await linear.issues({
+            first: 100,
+            after: cursor,
+            filter,
+          });
 
-    while (hasMore) {
-      const issues = await linear.issues({
-        first: 100,
-        after: cursor,
-        filter,
-      });
+          const batch = [];
+          for (const issue of issues.nodes) {
+            const [state, assignee, project] = await Promise.all([
+              issue.state,
+              issue.assignee,
+              issue.project,
+            ]);
+            batch.push({
+              id: issue.id,
+              identifier: issue.identifier,
+              title: issue.title,
+              url: issue.url,
+              createdAt: issue.createdAt.toISOString(),
+              completedAt: issue.completedAt?.toISOString() ?? null,
+              canceledAt: issue.canceledAt?.toISOString() ?? null,
+              estimate: issue.estimate ?? null,
+              stateType: state?.type ?? "unknown",
+              stateName: state?.name ?? "Unknown",
+              assignee: assignee?.name ?? null,
+              project: project?.name ?? null,
+              priority: issue.priority,
+              priorityLabel: issue.priorityLabel,
+            });
+          }
 
-      for (const issue of issues.nodes) {
-        const [state, assignee, project] = await Promise.all([
-          issue.state,
-          issue.assignee,
-          issue.project,
-        ]);
-        allIssues.push({
-          id: issue.id,
-          identifier: issue.identifier,
-          title: issue.title,
-          url: issue.url,
-          createdAt: issue.createdAt.toISOString(),
-          completedAt: issue.completedAt?.toISOString() ?? null,
-          canceledAt: issue.canceledAt?.toISOString() ?? null,
-          estimate: issue.estimate ?? null,
-          stateType: state?.type ?? "unknown",
-          stateName: state?.name ?? "Unknown",
-          assignee: assignee?.name ?? null,
-          project: project?.name ?? null,
-          priority: issue.priority,
-          priorityLabel: issue.priorityLabel,
-        });
-      }
+          loaded += batch.length;
+          hasMore = issues.pageInfo.hasNextPage;
+          cursor = issues.pageInfo.endCursor ?? undefined;
 
-      hasMore = issues.pageInfo.hasNextPage;
-      cursor = issues.pageInfo.endCursor ?? undefined;
-    }
+          controller.enqueue(
+            encoder.encode(JSON.stringify({ loaded, hasMore, issues: batch }) + "\n")
+          );
+        }
 
-    return NextResponse.json(allIssues);
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: { "Content-Type": "application/x-ndjson" },
+    });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
