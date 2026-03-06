@@ -192,6 +192,8 @@ export default function Home() {
   const [endDate, setEndDate] = useState("");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
+  const [sortCol, setSortCol] = useState<keyof Issue>("priority");
+  const [sortAsc, setSortAsc] = useState(false);
 
   const streamIssues = useCallback(async (params: URLSearchParams) => {
     setError("");
@@ -320,6 +322,24 @@ export default function Home() {
     });
   }, [displayIssues, selectedDay, viewMode]);
 
+  const sortedIssues = useMemo(() => {
+    return [...filteredIssues].sort((a, b) => {
+      const av = a[sortCol] ?? "";
+      const bv = b[sortCol] ?? "";
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortAsc ? cmp : -cmp;
+    });
+  }, [filteredIssues, sortCol, sortAsc]);
+
+  const handleSort = (col: keyof Issue) => {
+    if (sortCol === col) {
+      setSortAsc((a) => !a);
+    } else {
+      setSortCol(col);
+      setSortAsc(true);
+    }
+  };
+
   const totalScope = displayIssues.length;
   const completedCount = displayIssues.filter(
     (i) => i.stateType === "completed" || i.stateType === "canceled",
@@ -429,7 +449,17 @@ export default function Home() {
             <Stat label="Progress" value={`${pctDone}%`} />
           </div>
 
-          <div className="bg-gray-900 rounded-lg p-6 mb-8">
+          <div className="bg-gray-900 rounded-lg p-6 mb-8 relative">
+            {loading && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-gray-900/70 backdrop-blur-[1px]">
+                <div className="text-center">
+                  <div className="inline-block h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2" />
+                  <div className="text-sm text-gray-400">
+                    {loadProgress.loaded} issues loaded...
+                  </div>
+                </div>
+              </div>
+            )}
             <ResponsiveContainer width="100%" height={400}>
               <BarChart
                 data={chartData.data}
@@ -466,7 +496,7 @@ export default function Home() {
 
           <div className="bg-gray-900 rounded-lg p-4">
             <div className="font-medium text-gray-300 mb-4">
-              Issues ({filteredIssues.length}
+              Issues ({sortedIssues.length}
               {selectedDay ? ` on ${selectedDay}` : ""})
               {selectedDay && (
                 <button
@@ -480,18 +510,19 @@ export default function Home() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-400 border-b border-gray-800">
-                  <th className="pb-2">ID</th>
-                  <th className="pb-2">Title</th>
-                  <th className="pb-2">Project</th>
-                  <th className="pb-2">Assignee</th>
-                  <th className="pb-2">State</th>
-                  <th className="pb-2">Est</th>
-                  <th className="pb-2">Created</th>
-                  <th className="pb-2">Completed</th>
+                  <SortTh col="identifier" label="ID" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="title" label="Title" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="project" label="Project" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="assignee" label="Assignee" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="stateName" label="State" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="estimate" label="Est" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="priority" label="Priority" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="createdAt" label="Created" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="completedAt" label="Completed" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                 </tr>
               </thead>
               <tbody>
-                {filteredIssues.map((issue) => (
+                {sortedIssues.map((issue) => (
                   <tr key={issue.id} className="border-b border-gray-800/50">
                     <td className="py-1.5 pr-4">
                       <a
@@ -533,6 +564,7 @@ export default function Home() {
                       </span>
                     </td>
                     <td className="py-1.5 pr-4">{issue.estimate ?? "-"}</td>
+                    <td className="py-1.5 pr-4 text-gray-400">{issue.priorityLabel}</td>
                     <td className="py-1.5 pr-4">
                       {issue.createdAt.split("T")[0]}
                     </td>
@@ -634,6 +666,31 @@ function ToggleGroup<T extends string>({
         ))}
       </div>
     </div>
+  );
+}
+
+function SortTh({
+  col,
+  label,
+  sortCol,
+  sortAsc,
+  onSort,
+}: {
+  col: keyof Issue;
+  label: string;
+  sortCol: keyof Issue;
+  sortAsc: boolean;
+  onSort: (col: keyof Issue) => void;
+}) {
+  const active = sortCol === col;
+  return (
+    <th
+      className="pb-2 cursor-pointer select-none hover:text-gray-200 transition-colors"
+      onClick={() => onSort(col)}
+    >
+      {label}
+      {active ? (sortAsc ? " ▲" : " ▼") : ""}
+    </th>
   );
 }
 
