@@ -13,6 +13,7 @@ import {
   Legend,
   ResponsiveContainer,
   ReferenceLine,
+  ReferenceArea,
   Cell,
 } from "recharts";
 
@@ -74,7 +75,6 @@ type ChartResult = {
   data: Record<string, string | number>[];
   keys: string[];
   projectedFrom?: string;
-  projKeys?: string[];
 };
 
 const COLORS = [
@@ -319,27 +319,6 @@ function buildCfdData(issues: Issue[], startDate: string, endDate: string): Char
 
   const keysArr = [...keys];
   const projectedFrom = applyCfdProjection(data, keysArr, days);
-
-  if (projectedFrom) {
-    const projKeys = keysArr.map((k) => `${k} (projected)`);
-    for (const point of data) {
-      if (point._projected) {
-        for (const key of keysArr) {
-          point[`${key} (projected)`] = point[key];
-          point[key] = 0;
-        }
-      } else if (point.date === projectedFrom) {
-        for (const key of keysArr) {
-          point[`${key} (projected)`] = point[key];
-        }
-      } else {
-        for (const key of keysArr) {
-          point[`${key} (projected)`] = 0;
-        }
-      }
-    }
-    return { data, keys: keysArr, projectedFrom, projKeys };
-  }
 
   return { data, keys: keysArr, projectedFrom };
 }
@@ -786,14 +765,11 @@ export default function Home() {
                   <Tooltip contentStyle={TOOLTIP_STYLE} />
                   <Legend />
                   {chartData.keys.map((key) => (
-                    <Area key={key} type="monotone" dataKey={key} stackId="actual" fill={`url(#cfd-${key})`} stroke={CFD_COLORS[key] ?? "#60A5FA"} fillOpacity={1} />
+                    <Area key={key} type="monotone" dataKey={key} stackId="a" fill={`url(#cfd-${key})`} stroke={CFD_COLORS[key] ?? "#60A5FA"} fillOpacity={1} />
                   ))}
-                  {chartData.projKeys?.map((key) => {
-                    const baseKey = key.replace(" (projected)", "");
-                    return (
-                      <Area key={key} type="monotone" dataKey={key} stackId="projected" fill={CFD_COLORS[baseKey] ?? "#60A5FA"} stroke={CFD_COLORS[baseKey] ?? "#60A5FA"} fillOpacity={0.25} strokeDasharray="4 4" legendType="none" />
-                    );
-                  })}
+                  {chartData.projectedFrom && (
+                    <ReferenceArea x1={chartData.projectedFrom} fill="#6366F1" fillOpacity={0.08} strokeOpacity={0} />
+                  )}
                 </AreaChart>
               ) : (
                 <BarChart data={chartData.data} onClick={handleChartClick} style={{ cursor: "pointer" }}>
