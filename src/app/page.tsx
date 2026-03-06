@@ -12,6 +12,8 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceLine,
+  Cell,
 } from "recharts";
 
 type Option = { id: string; name: string };
@@ -79,11 +81,46 @@ function getDateRange(issues: Issue[], startDate: string, endDate: string) {
   return days;
 }
 
+type ChartResult = {
+  data: Record<string, string | number>[];
+  keys: string[];
+  projectedFrom?: string;
+  projKeys?: string[];
+};
+
+function applyProjection(
+  data: Record<string, string | number>[],
+  keys: string[],
+  days: string[],
+): string | undefined {
+  const today = new Date().toISOString().split("T")[0];
+  const todayIdx = days.indexOf(today);
+  if (todayIdx < 1 || todayIdx >= days.length - 1) return undefined;
+
+  const lookback = Math.min(7, todayIdx);
+  const refIdx = todayIdx - lookback;
+
+  const rates: Record<string, number> = {};
+  for (const key of keys) {
+    rates[key] = ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+  }
+
+  for (let i = todayIdx + 1; i < data.length; i++) {
+    const ahead = i - todayIdx;
+    data[i]._projected = 1;
+    for (const key of keys) {
+      data[i][key] = Math.max(0, Math.round((data[todayIdx][key] as number) + rates[key] * ahead));
+    }
+  }
+
+  return today;
+}
+
 function buildCfdData(
   issues: Issue[],
   startDate: string,
   endDate: string,
-): { data: Record<string, string | number>[]; keys: string[] } {
+): ChartResult {
   if (issues.length === 0) return { data: [], keys: [] };
 
   const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
@@ -132,7 +169,33 @@ function buildCfdData(
     data.push(point);
   }
 
-  return { data, keys: [...keys] };
+  const keysArr = [...keys];
+  const projectedFrom = applyProjection(data, keysArr, days);
+
+  if (projectedFrom) {
+    // Split projected data into separate keys for distinct styling
+    const projKeys = keysArr.map((k) => `${k} (projected)`);
+    for (const point of data) {
+      if (point._projected) {
+        for (const key of keysArr) {
+          point[`${key} (projected)`] = point[key];
+          point[key] = 0;
+        }
+      } else if (point.date === projectedFrom) {
+        // Bridge point: values in both sets for continuity
+        for (const key of keysArr) {
+          point[`${key} (projected)`] = point[key];
+        }
+      } else {
+        for (const key of keysArr) {
+          point[`${key} (projected)`] = 0;
+        }
+      }
+    }
+    return { data, keys: keysArr, projectedFrom, projKeys };
+  }
+
+  return { data, keys: keysArr, projectedFrom };
 }
 
 function buildChartData(
@@ -141,7 +204,7 @@ function buildChartData(
   colorBy: ColorMode,
   startDate: string,
   endDate: string,
-): { data: Record<string, string | number>[]; keys: string[] } {
+): ChartResult {
   if (issues.length === 0) return { data: [], keys: [] };
 
   const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
@@ -217,7 +280,10 @@ function buildChartData(
     data.push(point);
   }
 
-  return { data, keys };
+  const projectedFrom = (view === "active" || view === "burndown")
+    ? applyProjection(data, keys, days)
+    : undefined;
+  return { data, keys, projectedFrom };
 }
 
 const VIEW_LABELS: Record<ViewMode, string> = {
@@ -257,7 +323,11 @@ export default function Home() {
     d.setMonth(d.getMonth() - 1);
     return d.toISOString().split("T")[0];
   });
-  const [endDate, setEndDate] = useState("");
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toISOString().split("T")[0];
+  });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
   const [sortCol, setSortCol] = useState<keyof Issue>("priority");
@@ -589,6 +659,14 @@ export default function Home() {
                   onClick={handleChartClick}
                   style={{ cursor: "pointer" }}
                 >
+                  <defs>
+                    {chartData.keys.map((key) => (
+                      <linearGradient key={key} id={`cfd-${key}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={CFD_COLORS[key] ?? "#60A5FA"} stopOpacity={0.7} />
+                        <stop offset="100%" stopColor={CFD_COLORS[key] ?? "#60A5FA"} stopOpacity={0.5} />
+                      </linearGradient>
+                    ))}
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -597,6 +675,9 @@ export default function Home() {
                     tickFormatter={(v: string) => v.slice(5)}
                   />
                   <YAxis stroke="#9CA3AF" fontSize={12} />
+                  {chartData.projectedFrom && (
+                    <ReferenceLine x={chartData.projectedFrom} stroke="#6366F1" strokeDasharray="4 4" label={{ value: "Today", fill: "#9CA3AF", fontSize: 11, position: "top" }} />
+                  )}
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "#1F2937",
@@ -610,12 +691,28 @@ export default function Home() {
                       key={key}
                       type="monotone"
                       dataKey={key}
-                      stackId="a"
-                      fill={CFD_COLORS[key] ?? "#60A5FA"}
+                      stackId="actual"
+                      fill={`url(#cfd-${key})`}
                       stroke={CFD_COLORS[key] ?? "#60A5FA"}
-                      fillOpacity={0.7}
+                      fillOpacity={1}
                     />
                   ))}
+                  {chartData.projKeys?.map((key) => {
+                    const baseKey = key.replace(" (projected)", "");
+                    return (
+                      <Area
+                        key={key}
+                        type="monotone"
+                        dataKey={key}
+                        stackId="projected"
+                        fill={CFD_COLORS[baseKey] ?? "#60A5FA"}
+                        stroke={CFD_COLORS[baseKey] ?? "#60A5FA"}
+                        fillOpacity={0.25}
+                        strokeDasharray="4 4"
+                        legendType="none"
+                      />
+                    );
+                  })}
                 </AreaChart>
               ) : (
                 <BarChart
@@ -631,6 +728,9 @@ export default function Home() {
                     tickFormatter={(v: string) => v.slice(5)}
                   />
                   <YAxis stroke="#9CA3AF" fontSize={12} />
+                  {chartData.projectedFrom && (
+                    <ReferenceLine x={chartData.projectedFrom} stroke="#6366F1" strokeDasharray="4 4" label={{ value: "Today", fill: "#9CA3AF", fontSize: 11, position: "top" }} />
+                  )}
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "#1F2937",
@@ -645,7 +745,11 @@ export default function Home() {
                       dataKey={key}
                       stackId="a"
                       fill={COLORS[i % COLORS.length]}
-                    />
+                    >
+                      {chartData.projectedFrom && chartData.data.map((entry, idx) => (
+                        <Cell key={idx} fillOpacity={entry._projected ? 0.35 : 1} />
+                      ))}
+                    </Bar>
                   ))}
                 </BarChart>
               )}
