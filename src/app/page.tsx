@@ -193,7 +193,7 @@ export default function Home() {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
   const [sortCol, setSortCol] = useState<keyof Issue>("priority");
-  const [sortAsc, setSortAsc] = useState(false);
+  const [sortAsc, setSortAsc] = useState(true);
 
   const streamIssues = useCallback(async (params: URLSearchParams) => {
     setError("");
@@ -323,9 +323,22 @@ export default function Home() {
   }, [displayIssues, selectedDay, viewMode]);
 
   const sortedIssues = useMemo(() => {
+    const STATE_ORDER: Record<string, number> = {
+      backlog: 0, unstarted: 1, started: 2, completed: 3, canceled: 4,
+    };
     return [...filteredIssues].sort((a, b) => {
-      const av = a[sortCol] ?? "";
-      const bv = b[sortCol] ?? "";
+      let av: string | number, bv: string | number;
+      if (sortCol === "priority") {
+        // Move "No priority" (0) to the end, otherwise sort by numeric value
+        av = a.priority === 0 ? 999 : a.priority;
+        bv = b.priority === 0 ? 999 : b.priority;
+      } else if (sortCol === "stateName") {
+        av = STATE_ORDER[a.stateType] ?? 99;
+        bv = STATE_ORDER[b.stateType] ?? 99;
+      } else {
+        av = a[sortCol] ?? "";
+        bv = b[sortCol] ?? "";
+      }
       const cmp = av < bv ? -1 : av > bv ? 1 : 0;
       return sortAsc ? cmp : -cmp;
     });
