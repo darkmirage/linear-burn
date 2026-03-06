@@ -35,35 +35,53 @@ type Issue = {
   priorityLabel: string;
 };
 
-function toLocalDate(iso: string): string {
-  const d = new Date(iso);
+// --- Date helpers ---
+
+function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function toLocalDate(iso: string): string {
+  return formatDate(new Date(iso));
 }
 
 function todayLocal(): string {
-  return toLocalDate(new Date().toISOString());
+  return formatDate(new Date());
 }
 
-function formatLocalDate(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// --- Issue helpers ---
+
+function getDoneIso(issue: Issue): string | null {
+  return issue.completedAt ?? issue.canceledAt;
 }
+
+function getDoneDate(issue: Issue): string | undefined {
+  const iso = getDoneIso(issue);
+  return iso ? toLocalDate(iso) : undefined;
+}
+
+function issueWeight(issues: Issue[]): (i: Issue) => number {
+  const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
+  return (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
+}
+
+// --- Chart types & constants ---
 
 type ViewMode = "created" | "active" | "burndown" | "closed" | "cfd";
 type ColorMode = "none" | "project" | "assignee" | "status" | "priority";
+
+type ChartResult = {
+  data: Record<string, string | number>[];
+  keys: string[];
+  projectedFrom?: string;
+  projKeys?: string[];
+};
 
 const COLORS = [
   "#60A5FA", "#F87171", "#34D399", "#FBBF24", "#A78BFA",
   "#F472B6", "#38BDF8", "#FB923C", "#4ADE80", "#E879F9",
   "#2DD4BF", "#FCA5A1", "#818CF8", "#FDE047", "#67E8F9",
 ];
-
-function getColorKey(issue: Issue, colorBy: ColorMode): string {
-  if (colorBy === "project") return issue.project ?? "No Project";
-  if (colorBy === "assignee") return issue.assignee ?? "Unassigned";
-  if (colorBy === "status") return issue.stateName;
-  if (colorBy === "priority") return issue.priorityLabel;
-  return "Issues";
-}
 
 const CFD_STATUS_ORDER = ["Completed", "Started", "Unstarted", "Backlog", "Canceled"] as const;
 const CFD_COLORS: Record<string, string> = {
@@ -74,11 +92,55 @@ const CFD_COLORS: Record<string, string> = {
   Canceled: "#6B7280",
 };
 
+const STATE_ORDER: Record<string, number> = {
+  backlog: 0, unstarted: 1, started: 2, completed: 3, canceled: 4,
+};
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "#1F2937",
+  border: "1px solid #374151",
+  borderRadius: 8,
+};
+
+const VIEW_LABELS: Record<ViewMode, string> = {
+  created: "Created",
+  active: "Active",
+  burndown: "Burndown",
+  closed: "Closed",
+  cfd: "CFD",
+};
+
+const COLOR_LABELS: Record<ColorMode, string> = {
+  none: "None",
+  project: "Project",
+  assignee: "Assignee",
+  status: "Status",
+  priority: "Priority",
+};
+
+const STATUS_MAP: Record<string, string> = {
+  completed: "Completed",
+  started: "Started",
+  unstarted: "Unstarted",
+  backlog: "Backlog",
+  canceled: "Canceled",
+};
+
+// --- Chart data builders ---
+
+function getColorKey(issue: Issue, colorBy: ColorMode): string {
+  if (colorBy === "project") return issue.project ?? "No Project";
+  if (colorBy === "assignee") return issue.assignee ?? "Unassigned";
+  if (colorBy === "status") return issue.stateName;
+  if (colorBy === "priority") return issue.priorityLabel;
+  return "Issues";
+}
+
 function getDateRange(issues: Issue[], startDate: string, endDate: string) {
   const createdDates = issues.map((i) => toLocalDate(i.createdAt));
   const doneDates = issues
-    .filter((i) => i.completedAt || i.canceledAt)
-    .map((i) => toLocalDate((i.completedAt ?? i.canceledAt)!));
+    .filter((i) => getDoneIso(i))
+    .map((i) => toLocalDate(getDoneIso(i)!));
   const today = todayLocal();
 
   const minDate = startDate || createdDates.sort()[0];
@@ -88,18 +150,11 @@ function getDateRange(issues: Issue[], startDate: string, endDate: string) {
   const cur = new Date(minDate + "T12:00:00");
   const end = new Date(maxDate + "T12:00:00");
   while (cur <= end) {
-    days.push(formatLocalDate(cur));
+    days.push(formatDate(cur));
     cur.setDate(cur.getDate() + 1);
   }
   return days;
 }
-
-type ChartResult = {
-  data: Record<string, string | number>[];
-  keys: string[];
-  projectedFrom?: string;
-  projKeys?: string[];
-};
 
 function applyProjection(
   data: Record<string, string | number>[],
@@ -129,28 +184,15 @@ function applyProjection(
   return today;
 }
 
-function buildCfdData(
-  issues: Issue[],
-  startDate: string,
-  endDate: string,
-): ChartResult {
+function buildCfdData(issues: Issue[], startDate: string, endDate: string): ChartResult {
   if (issues.length === 0) return { data: [], keys: [] };
 
-  const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
-  const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
+  const w = issueWeight(issues);
   const days = getDateRange(issues, startDate, endDate);
-
-  const statusMap: Record<string, string> = {
-    completed: "Completed",
-    started: "Started",
-    unstarted: "Unstarted",
-    backlog: "Backlog",
-    canceled: "Canceled",
-  };
 
   const data: Record<string, string | number>[] = [];
   const keys = CFD_STATUS_ORDER.filter((s) =>
-    issues.some((i) => statusMap[i.stateType] === s)
+    issues.some((i) => STATUS_MAP[i.stateType] === s)
   );
 
   for (const day of days) {
@@ -160,17 +202,14 @@ function buildCfdData(
     for (const issue of issues) {
       const created = toLocalDate(issue.createdAt);
       if (created > day) continue;
-      const doneDate = issue.completedAt ?? issue.canceledAt
-        ? toLocalDate((issue.completedAt ?? issue.canceledAt)!)
-        : undefined;
+      const doneDate = getDoneDate(issue);
 
       let status: string;
       if (doneDate && doneDate <= day) {
         status = issue.canceledAt && (!issue.completedAt || issue.canceledAt <= issue.completedAt)
           ? "Canceled" : "Completed";
       } else {
-        status = statusMap[issue.stateType] ?? "Unstarted";
-        // If issue is currently completed/canceled but wasn't done yet on this day, it was active
+        status = STATUS_MAP[issue.stateType] ?? "Unstarted";
         if (status === "Completed" || status === "Canceled") {
           status = "Started";
         }
@@ -188,7 +227,6 @@ function buildCfdData(
   const projectedFrom = applyProjection(data, keysArr, days);
 
   if (projectedFrom) {
-    // Split projected data into separate keys for distinct styling
     const projKeys = keysArr.map((k) => `${k} (projected)`);
     for (const point of data) {
       if (point._projected) {
@@ -197,7 +235,6 @@ function buildCfdData(
           point[key] = 0;
         }
       } else if (point.date === projectedFrom) {
-        // Bridge point: values in both sets for continuity
         for (const key of keysArr) {
           point[`${key} (projected)`] = point[key];
         }
@@ -222,10 +259,8 @@ function buildChartData(
 ): ChartResult {
   if (issues.length === 0) return { data: [], keys: [] };
 
-  const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
-  const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
+  const w = issueWeight(issues);
   const k = (i: Issue) => getColorKey(i, colorBy);
-
   const days = getDateRange(issues, startDate, endDate);
 
   const allKeys = new Set<string>();
@@ -246,16 +281,15 @@ function buildChartData(
       }
     } else if (view === "closed") {
       for (const issue of issues) {
-        const done = issue.completedAt ?? issue.canceledAt;
-        if (done && toLocalDate(done) === day) {
+        const doneDate = getDoneDate(issue);
+        if (doneDate === day) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
       }
     } else if (view === "active") {
       for (const issue of issues) {
         const created = toLocalDate(issue.createdAt);
-        const done = issue.completedAt ?? issue.canceledAt;
-        const doneDate = done ? toLocalDate(done) : undefined;
+        const doneDate = getDoneDate(issue);
         if (created <= day && (!doneDate || doneDate > day)) {
           point[k(issue)] = (point[k(issue)] as number) + w(issue);
         }
@@ -266,8 +300,8 @@ function buildChartData(
       if (colorBy === "none") {
         let completed = 0;
         for (const issue of issues) {
-          const done = issue.completedAt ?? issue.canceledAt;
-          if (done && toLocalDate(done) <= day) {
+          const doneDate = getDoneDate(issue);
+          if (doneDate && doneDate <= day) {
             completed += w(issue);
           }
         }
@@ -282,8 +316,8 @@ function buildChartData(
         for (const issue of issues) {
           const g = k(issue);
           groupTotals[g] += w(issue);
-          const done = issue.completedAt ?? issue.canceledAt;
-          if (done && toLocalDate(done) <= day) {
+          const doneDate = getDoneDate(issue);
+          if (doneDate && doneDate <= day) {
             groupCompleted[g] += w(issue);
           }
         }
@@ -302,21 +336,15 @@ function buildChartData(
   return { data, keys, projectedFrom };
 }
 
-const VIEW_LABELS: Record<ViewMode, string> = {
-  created: "Created",
-  active: "Active",
-  burndown: "Burndown",
-  closed: "Closed",
-  cfd: "CFD",
-};
+// --- API helpers ---
 
-const COLOR_LABELS: Record<ColorMode, string> = {
-  none: "None",
-  project: "Project",
-  assignee: "Assignee",
-  status: "Status",
-  priority: "Priority",
-};
+async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Fetch failed (${r.status})`);
+  return r.json();
+}
+
+// --- Main component ---
 
 export default function Home() {
   const [teams, setTeams] = useState<Option[]>([]);
@@ -337,12 +365,12 @@ export default function Home() {
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
-    return formatLocalDate(d);
+    return formatDate(d);
   });
   const [endDate, setEndDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 14);
-    return formatLocalDate(d);
+    return formatDate(d);
   });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [hideBacklog, setHideBacklog] = useState(true);
@@ -404,12 +432,8 @@ export default function Home() {
   const initialLoadDone = useRef(false);
 
   useEffect(() => {
-    fetch("/api/linear?action=teams")
-      .then((r) => {
-        if (!r.ok) throw new Error(`Teams fetch failed (${r.status})`);
-        return r.json();
-      })
-      .then((data: Option[]) => {
+    fetchJson<Option[]>("/api/linear?action=teams")
+      .then((data) => {
         setTeams(data);
         const pe = data.find((t) => t.name === "Product Engineering");
         if (pe) setSelectedTeam(pe.id);
@@ -426,15 +450,9 @@ export default function Home() {
       return;
     }
     Promise.all([
-      fetch(`/api/linear?action=projects&teamId=${selectedTeam}`).then((r) => {
-        if (!r.ok) throw new Error(`Projects fetch failed (${r.status})`);
-        return r.json();
-      }),
-      fetch(`/api/linear?action=labels&teamId=${selectedTeam}`).then((r) => {
-        if (!r.ok) throw new Error(`Labels fetch failed (${r.status})`);
-        return r.json();
-      }),
-    ]).then(([p, l]: [Option[], Option[]]) => {
+      fetchJson<Option[]>(`/api/linear?action=projects&teamId=${selectedTeam}`),
+      fetchJson<Option[]>(`/api/linear?action=labels&teamId=${selectedTeam}`),
+    ]).then(([p, l]) => {
       setProjects(p);
       setLabels(l);
       if (!initialLoadDone.current) {
@@ -484,18 +502,11 @@ export default function Home() {
     if (!selectedDay) return displayIssues;
     return displayIssues.filter((issue) => {
       const created = toLocalDate(issue.createdAt);
-      const done = issue.completedAt ?? issue.canceledAt;
-      const doneDate = done ? toLocalDate(done) : undefined;
-      if (viewMode === "created") {
-        return created === selectedDay;
-      } else if (viewMode === "closed") {
-        return doneDate === selectedDay;
-      } else if (viewMode === "active") {
-        return created <= selectedDay && (!doneDate || doneDate > selectedDay);
-      } else {
-        // burndown: not yet completed as of that day
-        return !doneDate || doneDate > selectedDay;
-      }
+      const doneDate = getDoneDate(issue);
+      if (viewMode === "created") return created === selectedDay;
+      if (viewMode === "closed") return doneDate === selectedDay;
+      if (viewMode === "active") return created <= selectedDay && (!doneDate || doneDate > selectedDay);
+      return !doneDate || doneDate > selectedDay;
     });
   }, [displayIssues, selectedDay, viewMode]);
 
@@ -517,13 +528,9 @@ export default function Home() {
   }, [filteredIssues, showActiveOnly, searchText]);
 
   const sortedIssues = useMemo(() => {
-    const STATE_ORDER: Record<string, number> = {
-      backlog: 0, unstarted: 1, started: 2, completed: 3, canceled: 4,
-    };
     return [...tableFilteredIssues].sort((a, b) => {
       let av: string | number, bv: string | number;
       if (sortCol === "priority") {
-        // Move "No priority" (0) to the end, otherwise sort by numeric value
         av = a.priority === 0 ? 999 : a.priority;
         bv = b.priority === 0 ? 999 : b.priority;
       } else if (sortCol === "stateName") {
@@ -612,11 +619,7 @@ export default function Home() {
       {issues.length > 0 && (
         <>
           <div className="flex flex-wrap items-end gap-3 sm:gap-4 mb-6">
-            <DateInput
-              label="Start"
-              value={startDate}
-              onChange={setStartDate}
-            />
+            <DateInput label="Start" value={startDate} onChange={setStartDate} />
             <DateInput label="End" value={endDate} onChange={setEndDate} />
 
             <ToggleGroup
@@ -671,11 +674,7 @@ export default function Home() {
             )}
             <ResponsiveContainer width="100%" height={400}>
               {viewMode === "cfd" ? (
-                <AreaChart
-                  data={chartData.data}
-                  onClick={handleChartClick}
-                  style={{ cursor: "pointer" }}
-                >
+                <AreaChart data={chartData.data} onClick={handleChartClick} style={{ cursor: "pointer" }}>
                   <defs>
                     {chartData.keys.map((key) => (
                       <linearGradient key={key} id={`cfd-${key}`} x1="0" y1="0" x2="0" y2="1">
@@ -685,84 +684,35 @@ export default function Home() {
                     ))}
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis
-                    dataKey="date"
-                    stroke="#9CA3AF"
-                    fontSize={12}
-                    tickFormatter={(v: string) => v.slice(5)}
-                  />
+                  <XAxis dataKey="date" stroke="#9CA3AF" fontSize={12} tickFormatter={(v: string) => v.slice(5)} />
                   <YAxis stroke="#9CA3AF" fontSize={12} />
                   {chartData.projectedFrom && (
                     <ReferenceLine x={chartData.projectedFrom} stroke="#6366F1" strokeDasharray="4 4" label={{ value: "Today", fill: "#9CA3AF", fontSize: 11, position: "top" }} />
                   )}
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#1F2937",
-                      border: "1px solid #374151",
-                      borderRadius: 8,
-                    }}
-                  />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} />
                   <Legend />
                   {chartData.keys.map((key) => (
-                    <Area
-                      key={key}
-                      type="monotone"
-                      dataKey={key}
-                      stackId="actual"
-                      fill={`url(#cfd-${key})`}
-                      stroke={CFD_COLORS[key] ?? "#60A5FA"}
-                      fillOpacity={1}
-                    />
+                    <Area key={key} type="monotone" dataKey={key} stackId="actual" fill={`url(#cfd-${key})`} stroke={CFD_COLORS[key] ?? "#60A5FA"} fillOpacity={1} />
                   ))}
                   {chartData.projKeys?.map((key) => {
                     const baseKey = key.replace(" (projected)", "");
                     return (
-                      <Area
-                        key={key}
-                        type="monotone"
-                        dataKey={key}
-                        stackId="projected"
-                        fill={CFD_COLORS[baseKey] ?? "#60A5FA"}
-                        stroke={CFD_COLORS[baseKey] ?? "#60A5FA"}
-                        fillOpacity={0.25}
-                        strokeDasharray="4 4"
-                        legendType="none"
-                      />
+                      <Area key={key} type="monotone" dataKey={key} stackId="projected" fill={CFD_COLORS[baseKey] ?? "#60A5FA"} stroke={CFD_COLORS[baseKey] ?? "#60A5FA"} fillOpacity={0.25} strokeDasharray="4 4" legendType="none" />
                     );
                   })}
                 </AreaChart>
               ) : (
-                <BarChart
-                  data={chartData.data}
-                  onClick={handleChartClick}
-                  style={{ cursor: "pointer" }}
-                >
+                <BarChart data={chartData.data} onClick={handleChartClick} style={{ cursor: "pointer" }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis
-                    dataKey="date"
-                    stroke="#9CA3AF"
-                    fontSize={12}
-                    tickFormatter={(v: string) => v.slice(5)}
-                  />
+                  <XAxis dataKey="date" stroke="#9CA3AF" fontSize={12} tickFormatter={(v: string) => v.slice(5)} />
                   <YAxis stroke="#9CA3AF" fontSize={12} />
                   {chartData.projectedFrom && (
                     <ReferenceLine x={chartData.projectedFrom} stroke="#6366F1" strokeDasharray="4 4" label={{ value: "Today", fill: "#9CA3AF", fontSize: 11, position: "top" }} />
                   )}
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#1F2937",
-                      border: "1px solid #374151",
-                      borderRadius: 8,
-                    }}
-                  />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} />
                   <Legend />
                   {chartData.keys.map((key, i) => (
-                    <Bar
-                      key={key}
-                      dataKey={key}
-                      stackId="a"
-                      fill={COLORS[i % COLORS.length]}
-                    >
+                    <Bar key={key} dataKey={key} stackId="a" fill={COLORS[i % COLORS.length]}>
                       {chartData.projectedFrom && chartData.data.map((entry, idx) => (
                         <Cell key={idx} fillOpacity={entry._projected ? 0.35 : 1} />
                       ))}
@@ -833,55 +783,7 @@ export default function Home() {
               </thead>
               <tbody>
                 {sortedIssues.map((issue) => (
-                  <tr key={issue.id} className="border-b border-gray-800/50">
-                    <td className="py-1.5 pr-4">
-                      <a
-                        href={issue.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-indigo-400 hover:text-indigo-300"
-                      >
-                        {issue.identifier}
-                      </a>
-                    </td>
-                    <td className="py-1.5 pr-4 truncate max-w-md">
-                      <a
-                        href={issue.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-indigo-300"
-                      >
-                        {issue.title}
-                      </a>
-                    </td>
-                    <td className="py-1.5 pr-4 text-gray-400">
-                      {issue.project ?? "-"}
-                    </td>
-                    <td className="py-1.5 pr-4 text-gray-400">
-                      {issue.assignee ?? "-"}
-                    </td>
-                    <td className="py-1.5 pr-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          issue.stateType === "completed"
-                            ? "bg-green-900/50 text-green-300"
-                            : issue.stateType === "canceled"
-                              ? "bg-gray-800 text-gray-400"
-                              : "bg-yellow-900/50 text-yellow-300"
-                        }`}
-                      >
-                        {issue.stateName}
-                      </span>
-                    </td>
-                    <td className="py-1.5 pr-4">{issue.estimate ?? "-"}</td>
-                    <td className="py-1.5 pr-4 text-gray-400">{issue.priorityLabel}</td>
-                    <td className="py-1.5 pr-4">
-                      {toLocalDate(issue.createdAt)}
-                    </td>
-                    <td className="py-1.5">
-                      {issue.completedAt ? toLocalDate(issue.completedAt) : "-"}
-                    </td>
-                  </tr>
+                  <IssueRow key={issue.id} issue={issue} />
                 ))}
               </tbody>
             </table>
@@ -890,6 +792,44 @@ export default function Home() {
         </>
       )}
     </main>
+  );
+}
+
+// --- Shared UI components ---
+
+function IssueRow({ issue }: { issue: Issue }) {
+  return (
+    <tr className="border-b border-gray-800/50">
+      <td className="py-1.5 pr-4">
+        <a href={issue.url} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300">
+          {issue.identifier}
+        </a>
+      </td>
+      <td className="py-1.5 pr-4 truncate max-w-md">
+        <a href={issue.url} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-300">
+          {issue.title}
+        </a>
+      </td>
+      <td className="py-1.5 pr-4 text-gray-400">{issue.project ?? "-"}</td>
+      <td className="py-1.5 pr-4 text-gray-400">{issue.assignee ?? "-"}</td>
+      <td className="py-1.5 pr-4">
+        <span
+          className={`px-2 py-0.5 rounded text-xs ${
+            issue.stateType === "completed"
+              ? "bg-green-900/50 text-green-300"
+              : issue.stateType === "canceled"
+                ? "bg-gray-800 text-gray-400"
+                : "bg-yellow-900/50 text-yellow-300"
+          }`}
+        >
+          {issue.stateName}
+        </span>
+      </td>
+      <td className="py-1.5 pr-4">{issue.estimate ?? "-"}</td>
+      <td className="py-1.5 pr-4 text-gray-400">{issue.priorityLabel}</td>
+      <td className="py-1.5 pr-4">{toLocalDate(issue.createdAt)}</td>
+      <td className="py-1.5">{issue.completedAt ? toLocalDate(issue.completedAt) : "-"}</td>
+    </tr>
   );
 }
 
