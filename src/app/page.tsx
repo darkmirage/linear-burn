@@ -224,7 +224,7 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   created: "Created",
   active: "Active",
   burndown: "Burndown",
-  closed: "Closed / Day",
+  closed: "Closed",
   cfd: "CFD",
 };
 
