@@ -755,6 +755,9 @@ export default function Home() {
                         <stop offset="100%" stopColor={CFD_COLORS[key] ?? "#60A5FA"} stopOpacity={0.5} />
                       </linearGradient>
                     ))}
+                    <pattern id="cfd-projected-stripes" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                      <rect width="2" height="6" fill="white" fillOpacity="0.18" />
+                    </pattern>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="date" stroke="#9CA3AF" fontSize={12} tickFormatter={(v: string) => v.slice(5)} />
@@ -768,7 +771,10 @@ export default function Home() {
                     <Area key={key} type="monotone" dataKey={key} stackId="a" fill={`url(#cfd-${key})`} stroke={CFD_COLORS[key] ?? "#60A5FA"} fillOpacity={1} />
                   ))}
                   {chartData.projectedFrom && (
-                    <ReferenceArea x1={chartData.projectedFrom} fill="#6366F1" fillOpacity={0.08} strokeOpacity={0} />
+                    <>
+                      <ReferenceArea x1={chartData.projectedFrom} fill="#000000" fillOpacity={0.3} strokeOpacity={0} />
+                      <ReferenceArea x1={chartData.projectedFrom} fill="url(#cfd-projected-stripes)" fillOpacity={1} strokeOpacity={0} />
+                    </>
                   )}
                 </AreaChart>
               ) : (
