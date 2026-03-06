@@ -3,18 +3,19 @@ import { LinearClient } from "@linear/sdk";
 
 const linear = new LinearClient({ apiKey: process.env.LINEAR_API_KEY! });
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const cache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL_ISSUES = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_META = 4 * 60 * 60 * 1000; // 4 hours (teams, projects, labels)
+const cache = new Map<string, { data: unknown; ts: number; ttl: number }>();
 
 function getCached<T>(key: string): T | null {
   const entry = cache.get(key);
-  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data as T;
+  if (entry && Date.now() - entry.ts < entry.ttl) return entry.data as T;
   cache.delete(key);
   return null;
 }
 
-function setCache(key: string, data: unknown) {
-  cache.set(key, { data, ts: Date.now() });
+function setCache(key: string, data: unknown, ttl: number) {
+  cache.set(key, { data, ts: Date.now(), ttl });
 }
 
 export async function GET(req: NextRequest) {
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest) {
 
     const teams = await linear.teams({ first: 100 });
     const data = teams.nodes.map((t) => ({ id: t.id, name: t.name }));
-    setCache(cacheKey, data);
+    setCache(cacheKey, data, CACHE_TTL_META);
     return NextResponse.json(data);
   }
 
@@ -47,7 +48,7 @@ export async function GET(req: NextRequest) {
       orderBy: "updatedAt" as never,
     });
     const data = projects.nodes.map((p) => ({ id: p.id, name: p.name }));
-    setCache(cacheKey, data);
+    setCache(cacheKey, data, CACHE_TTL_META);
     return NextResponse.json(data);
   }
 
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
       }
     }
     data.sort((a, b) => a.name.localeCompare(b.name));
-    setCache(cacheKey, data);
+    setCache(cacheKey, data, CACHE_TTL_META);
     return NextResponse.json(data);
   }
 
@@ -166,7 +167,7 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        setCache(cacheKey, allIssues);
+        setCache(cacheKey, allIssues, CACHE_TTL_ISSUES);
         controller.close();
       },
     });
