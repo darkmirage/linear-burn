@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   BarChart,
   Bar,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -31,7 +33,7 @@ type Issue = {
   priorityLabel: string;
 };
 
-type ViewMode = "created" | "active" | "burndown" | "closed";
+type ViewMode = "created" | "active" | "burndown" | "closed" | "cfd";
 type ColorMode = "none" | "project" | "assignee" | "status" | "priority";
 
 const COLORS = [
@@ -48,6 +50,91 @@ function getColorKey(issue: Issue, colorBy: ColorMode): string {
   return "Issues";
 }
 
+const CFD_STATUS_ORDER = ["Completed", "Started", "Unstarted", "Backlog", "Canceled"] as const;
+const CFD_COLORS: Record<string, string> = {
+  Completed: "#34D399",
+  Started: "#60A5FA",
+  Unstarted: "#FBBF24",
+  Backlog: "#9CA3AF",
+  Canceled: "#6B7280",
+};
+
+function getDateRange(issues: Issue[], startDate: string, endDate: string) {
+  const createdDates = issues.map((i) => i.createdAt.split("T")[0]);
+  const doneDates = issues
+    .filter((i) => i.completedAt || i.canceledAt)
+    .map((i) => (i.completedAt ?? i.canceledAt)!.split("T")[0]);
+  const today = new Date().toISOString().split("T")[0];
+
+  const minDate = startDate || createdDates.sort()[0];
+  const maxDate = endDate || [...createdDates, ...doneDates, today].sort().pop()!;
+
+  const days: string[] = [];
+  const cur = new Date(minDate + "T00:00:00");
+  const end = new Date(maxDate + "T00:00:00");
+  while (cur <= end) {
+    days.push(cur.toISOString().split("T")[0]);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return days;
+}
+
+function buildCfdData(
+  issues: Issue[],
+  startDate: string,
+  endDate: string,
+): { data: Record<string, string | number>[]; keys: string[] } {
+  if (issues.length === 0) return { data: [], keys: [] };
+
+  const useEst = issues.some((i) => i.estimate != null && i.estimate > 0);
+  const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
+  const days = getDateRange(issues, startDate, endDate);
+
+  const statusMap: Record<string, string> = {
+    completed: "Completed",
+    started: "Started",
+    unstarted: "Unstarted",
+    backlog: "Backlog",
+    canceled: "Canceled",
+  };
+
+  const data: Record<string, string | number>[] = [];
+  const keys = CFD_STATUS_ORDER.filter((s) =>
+    issues.some((i) => statusMap[i.stateType] === s)
+  );
+
+  for (const day of days) {
+    const point: Record<string, string | number> = { date: day };
+    keys.forEach((key) => (point[key] = 0));
+
+    for (const issue of issues) {
+      const created = issue.createdAt.split("T")[0];
+      if (created > day) continue;
+      const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
+
+      let status: string;
+      if (doneDate && doneDate <= day) {
+        status = issue.canceledAt && (!issue.completedAt || issue.canceledAt <= issue.completedAt)
+          ? "Canceled" : "Completed";
+      } else {
+        status = statusMap[issue.stateType] ?? "Unstarted";
+        // If issue is currently completed/canceled but wasn't done yet on this day, it was active
+        if (status === "Completed" || status === "Canceled") {
+          status = "Started";
+        }
+      }
+
+      if (keys.includes(status as typeof keys[number])) {
+        point[status] = (point[status] as number) + w(issue);
+      }
+    }
+
+    data.push(point);
+  }
+
+  return { data, keys: [...keys] };
+}
+
 function buildChartData(
   issues: Issue[],
   view: ViewMode,
@@ -61,23 +148,7 @@ function buildChartData(
   const w = (i: Issue) => (useEst ? (i.estimate ?? 1) : 1);
   const k = (i: Issue) => getColorKey(i, colorBy);
 
-  const createdDates = issues.map((i) => i.createdAt.split("T")[0]);
-  const doneDates = issues
-    .filter((i) => i.completedAt || i.canceledAt)
-    .map((i) => (i.completedAt ?? i.canceledAt)!.split("T")[0]);
-  const today = new Date().toISOString().split("T")[0];
-
-  const minDate = startDate || createdDates.sort()[0];
-  const maxDate =
-    endDate || [...createdDates, ...doneDates, today].sort().pop()!;
-
-  const days: string[] = [];
-  const cur = new Date(minDate + "T00:00:00");
-  const end = new Date(maxDate + "T00:00:00");
-  while (cur <= end) {
-    days.push(cur.toISOString().split("T")[0]);
-    cur.setDate(cur.getDate() + 1);
-  }
+  const days = getDateRange(issues, startDate, endDate);
 
   const allKeys = new Set<string>();
   issues.forEach((i) => allKeys.add(k(i)));
@@ -103,7 +174,6 @@ function buildChartData(
         }
       }
     } else if (view === "active") {
-      // Active issues on each day: created on or before, not yet done
       for (const issue of issues) {
         const created = issue.createdAt.split("T")[0];
         const doneDate = (issue.completedAt ?? issue.canceledAt)?.split("T")[0];
@@ -112,10 +182,8 @@ function buildChartData(
         }
       }
     } else {
-      // Burndown: total scope fixed from day 1, minus cumulative completions
+      // Burndown
       const totalScope = issues.reduce((s, i) => s + w(i), 0);
-      // For color mode, we need per-group remaining
-      // Each group starts with its full count and decreases
       if (colorBy === "none") {
         let completed = 0;
         for (const issue of issues) {
@@ -126,7 +194,6 @@ function buildChartData(
         }
         point["Issues"] = totalScope - completed;
       } else {
-        // Per-group: each group's total minus its completions
         const groupTotals: Record<string, number> = {};
         const groupCompleted: Record<string, number> = {};
         keys.forEach((key) => {
@@ -158,6 +225,7 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   active: "Active",
   burndown: "Burndown",
   closed: "Closed / Day",
+  cfd: "CFD",
 };
 
 const COLOR_LABELS: Record<ColorMode, string> = {
@@ -311,7 +379,9 @@ export default function Home() {
   );
 
   const chartData = useMemo(
-    () => buildChartData(displayIssues, viewMode, colorMode, startDate, endDate),
+    () => viewMode === "cfd"
+      ? buildCfdData(displayIssues, startDate, endDate)
+      : buildChartData(displayIssues, viewMode, colorMode, startDate, endDate),
     [displayIssues, viewMode, colorMode, startDate, endDate],
   );
 
@@ -398,8 +468,8 @@ export default function Home() {
     totalScope > 0 ? Math.round((completedCount / totalScope) * 100) : 0;
 
   return (
-    <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <h1 className="text-3xl font-bold mb-8">Linear Burn Rate</h1>
+    <main className="min-h-screen bg-gray-950 text-gray-100 p-4 sm:p-8">
+      <h1 className="text-2xl sm:text-3xl font-bold mb-6 sm:mb-8">Linear Burn Rate</h1>
 
       <div className="flex flex-wrap gap-4 mb-4">
         <Select
@@ -454,7 +524,7 @@ export default function Home() {
 
       {issues.length > 0 && (
         <>
-          <div className="flex flex-wrap items-end gap-4 mb-6">
+          <div className="flex flex-wrap items-end gap-3 sm:gap-4 mb-6">
             <DateInput
               label="Start"
               value={startDate}
@@ -471,12 +541,14 @@ export default function Home() {
                 setSelectedDay(null);
               }}
             />
-            <ToggleGroup
-              label="Color by"
-              options={COLOR_LABELS}
-              value={colorMode}
-              onChange={setColorMode}
-            />
+            {viewMode !== "cfd" && (
+              <ToggleGroup
+                label="Color by"
+                options={COLOR_LABELS}
+                value={colorMode}
+                onChange={setColorMode}
+              />
+            )}
             <div className="flex flex-col gap-1">
               <label className="text-xs text-gray-400">Backlog</label>
               <button
@@ -492,7 +564,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex gap-8 mb-6 text-sm">
+          <div className="flex flex-wrap gap-4 sm:gap-8 mb-6 text-sm">
             <Stat label="Total Issues" value={totalScope} />
             <Stat label="Completed" value={completedCount} />
             <Stat label="Remaining" value={totalScope - completedCount} />
@@ -511,40 +583,76 @@ export default function Home() {
               </div>
             )}
             <ResponsiveContainer width="100%" height={400}>
-              <BarChart
-                data={chartData.data}
-                onClick={handleChartClick}
-                style={{ cursor: "pointer" }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis
-                  dataKey="date"
-                  stroke="#9CA3AF"
-                  fontSize={12}
-                  tickFormatter={(v: string) => v.slice(5)}
-                />
-                <YAxis stroke="#9CA3AF" fontSize={12} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1F2937",
-                    border: "1px solid #374151",
-                    borderRadius: 8,
-                  }}
-                />
-                <Legend />
-                {chartData.keys.map((key, i) => (
-                  <Bar
-                    key={key}
-                    dataKey={key}
-                    stackId="a"
-                    fill={COLORS[i % COLORS.length]}
+              {viewMode === "cfd" ? (
+                <AreaChart
+                  data={chartData.data}
+                  onClick={handleChartClick}
+                  style={{ cursor: "pointer" }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#9CA3AF"
+                    fontSize={12}
+                    tickFormatter={(v: string) => v.slice(5)}
                   />
-                ))}
-              </BarChart>
+                  <YAxis stroke="#9CA3AF" fontSize={12} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1F2937",
+                      border: "1px solid #374151",
+                      borderRadius: 8,
+                    }}
+                  />
+                  <Legend />
+                  {chartData.keys.map((key) => (
+                    <Area
+                      key={key}
+                      type="monotone"
+                      dataKey={key}
+                      stackId="a"
+                      fill={CFD_COLORS[key] ?? "#60A5FA"}
+                      stroke={CFD_COLORS[key] ?? "#60A5FA"}
+                      fillOpacity={0.7}
+                    />
+                  ))}
+                </AreaChart>
+              ) : (
+                <BarChart
+                  data={chartData.data}
+                  onClick={handleChartClick}
+                  style={{ cursor: "pointer" }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#9CA3AF"
+                    fontSize={12}
+                    tickFormatter={(v: string) => v.slice(5)}
+                  />
+                  <YAxis stroke="#9CA3AF" fontSize={12} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1F2937",
+                      border: "1px solid #374151",
+                      borderRadius: 8,
+                    }}
+                  />
+                  <Legend />
+                  {chartData.keys.map((key, i) => (
+                    <Bar
+                      key={key}
+                      dataKey={key}
+                      stackId="a"
+                      fill={COLORS[i % COLORS.length]}
+                    />
+                  ))}
+                </BarChart>
+              )}
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-gray-900 rounded-lg p-4">
+          <div className="bg-gray-900 rounded-lg p-3 sm:p-4">
             <div className="font-medium text-gray-300 mb-4">
               Issues ({sortedIssues.length}
               {selectedDay ? ` on ${selectedDay}` : ""})
@@ -557,7 +665,8 @@ export default function Home() {
                 </button>
               )}
             </div>
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto -mx-3 sm:-mx-4 px-3 sm:px-4">
+            <table className="w-full text-sm min-w-[800px]">
               <thead>
                 <tr className="text-left text-gray-400">
                   <th className="pb-1"></th>
@@ -655,6 +764,7 @@ export default function Home() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -681,7 +791,7 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm min-w-[200px]"
+        className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm w-full sm:min-w-[200px]"
       >
         <option value="">{placeholder ?? "All"}</option>
         {options.map((o) => (
