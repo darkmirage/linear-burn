@@ -103,12 +103,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const filter: Record<string, unknown> = {};
-    if (projectId) filter.project = { id: { eq: projectId } };
-    if (labelId) filter.labels = { some: { id: { eq: labelId } } };
-    if (teamId) filter.team = { id: { eq: teamId } };
+    const filterParts: string[] = [];
+    if (projectId) filterParts.push(`project: { id: { eq: "${projectId}" } }`);
+    if (labelId) filterParts.push(`labels: { some: { id: { eq: "${labelId}" } } }`);
+    if (teamId) filterParts.push(`team: { id: { eq: "${teamId}" } }`);
+    const filterStr = filterParts.length ? `filter: { ${filterParts.join(", ")} }` : "";
 
-    const BATCH_SIZE = 20;
     const allIssues: IssueData[] = [];
 
     const stream = new ReadableStream({
@@ -121,58 +121,59 @@ export async function GET(req: NextRequest) {
 
         try {
           while (hasMore) {
-            const page = await linear.issues({
-              first: 100,
-              after: cursor,
-              filter,
-            });
+            const afterStr = cursor ? `after: "${cursor}"` : "";
+            const query = `query {
+              issues(first: 100 ${afterStr} ${filterStr}) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id identifier title url
+                  createdAt completedAt canceledAt
+                  estimate priority priorityLabel
+                  state { name type }
+                  assignee { name }
+                  project { name }
+                }
+              }
+            }`;
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const result = await linear.client.rawRequest<any, Record<string, never>>(query);
+            const page = result.data.issues;
 
             hasMore = page.pageInfo.hasNextPage;
             cursor = page.pageInfo.endCursor ?? undefined;
             const nodes = page.nodes;
 
-            for (let i = 0; i < nodes.length; i += BATCH_SIZE) {
-              const slice = nodes.slice(i, i + BATCH_SIZE);
-              const issues = await Promise.all(
-                slice.map(async (issue) => {
-                  const issueCacheKey = `issue:${issue.id}`;
-                  const cachedIssue = getCached<IssueData>(issueCacheKey);
-                  if (cachedIssue) return cachedIssue;
+            const issues: IssueData[] = nodes.map((node: Record<string, unknown>) => {
+              const state = node.state as { name: string; type: string } | null;
+              const assignee = node.assignee as { name: string } | null;
+              const project = node.project as { name: string } | null;
+              const data: IssueData = {
+                id: node.id as string,
+                identifier: node.identifier as string,
+                title: node.title as string,
+                url: node.url as string,
+                createdAt: node.createdAt as string,
+                completedAt: (node.completedAt as string) ?? null,
+                canceledAt: (node.canceledAt as string) ?? null,
+                estimate: (node.estimate as number) ?? null,
+                stateType: state?.type ?? "unknown",
+                stateName: state?.name ?? "Unknown",
+                assignee: assignee?.name ?? null,
+                project: project?.name ?? null,
+                priority: node.priority as number,
+                priorityLabel: node.priorityLabel as string,
+              };
+              setCache(`issue:${data.id}`, data, CACHE_TTL_ISSUES);
+              return data;
+            });
 
-                  const [state, assignee, project] = await Promise.all([
-                    issue.state,
-                    issue.assignee,
-                    issue.project,
-                  ]);
-                  const data: IssueData = {
-                    id: issue.id,
-                    identifier: issue.identifier,
-                    title: issue.title,
-                    url: issue.url,
-                    createdAt: issue.createdAt.toISOString(),
-                    completedAt: issue.completedAt?.toISOString() ?? null,
-                    canceledAt: issue.canceledAt?.toISOString() ?? null,
-                    estimate: issue.estimate ?? null,
-                    stateType: state?.type ?? "unknown",
-                    stateName: state?.name ?? "Unknown",
-                    assignee: assignee?.name ?? null,
-                    project: project?.name ?? null,
-                    priority: issue.priority,
-                    priorityLabel: issue.priorityLabel,
-                  };
-                  setCache(issueCacheKey, data, CACHE_TTL_ISSUES);
-                  return data;
-                })
-              );
+            allIssues.push(...issues);
+            loaded += issues.length;
 
-              allIssues.push(...issues);
-              loaded += issues.length;
-              const done = !hasMore && i + BATCH_SIZE >= nodes.length;
-
-              controller.enqueue(
-                encoder.encode(JSON.stringify({ loaded, hasMore: !done, issues }) + "\n")
-              );
-            }
+            controller.enqueue(
+              encoder.encode(JSON.stringify({ loaded, hasMore, issues }) + "\n")
+            );
           }
           completed = true;
         } catch (e) {
