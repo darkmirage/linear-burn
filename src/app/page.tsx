@@ -527,47 +527,56 @@ export default function Home() {
           </div>
 
           <div className="bg-gray-900 rounded-lg p-4">
-            <div className="flex flex-wrap items-center gap-4 mb-4">
-              <div className="font-medium text-gray-300">
-                Issues ({sortedIssues.length}
-                {selectedDay ? ` on ${selectedDay}` : ""})
-                {selectedDay && (
-                  <button
-                    onClick={() => setSelectedDay(null)}
-                    className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
-                  >
-                    clear filter
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-3 ml-auto">
+            <div className="font-medium text-gray-300 mb-4">
+              Issues ({sortedIssues.length}
+              {selectedDay ? ` on ${selectedDay}` : ""})
+              {selectedDay && (
                 <button
-                  onClick={() => setShowActiveOnly((v) => !v)}
-                  className={`px-3 py-1.5 text-xs rounded border transition ${
-                    showActiveOnly
-                      ? "border-indigo-500 bg-indigo-600 text-white"
-                      : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
-                  }`}
+                  onClick={() => setSelectedDay(null)}
+                  className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
                 >
-                  Active only
+                  clear filter
                 </button>
-                <input
-                  type="text"
-                  placeholder="Search issues..."
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm w-56 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
+              )}
             </div>
             <table className="w-full text-sm">
               <thead>
+                <tr className="text-left text-gray-400">
+                  <th className="pb-1"></th>
+                  <th className="pb-1">
+                    <input
+                      type="text"
+                      placeholder="Search issues..."
+                      value={searchText}
+                      onChange={(e) => setSearchText(e.target.value)}
+                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-full placeholder-gray-500 focus:outline-none focus:border-indigo-500 font-normal"
+                    />
+                  </th>
+                  <th className="pb-1"></th>
+                  <th className="pb-1"></th>
+                  <th className="pb-1">
+                    <button
+                      onClick={() => setShowActiveOnly((v) => !v)}
+                      className={`px-2 py-1 text-xs rounded border transition font-normal ${
+                        showActiveOnly
+                          ? "border-indigo-500 bg-indigo-600 text-white"
+                          : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                      }`}
+                    >
+                      Active only
+                    </button>
+                  </th>
+                  <th className="pb-1"></th>
+                  <th className="pb-1"></th>
+                  <th className="pb-1"></th>
+                  <th className="pb-1"></th>
+                </tr>
                 <tr className="text-left text-gray-400 border-b border-gray-800">
                   <SortTh col="identifier" label="ID" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="title" label="Title" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="project" label="Project" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="assignee" label="Assignee" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
-                  <SortTh col="stateName" label="State" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
+                  <SortTh col="stateName" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="estimate" label="Est" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="priority" label="Priority" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
                   <SortTh col="createdAt" label="Created" sortCol={sortCol} sortAsc={sortAsc} onSort={handleSort} />
