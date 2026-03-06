@@ -3,17 +3,40 @@ import { LinearClient } from "@linear/sdk";
 
 const linear = new LinearClient({ apiKey: process.env.LINEAR_API_KEY! });
 
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const cache = new Map<string, { data: unknown; ts: number }>();
+
+function getCached<T>(key: string): T | null {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data as T;
+  cache.delete(key);
+  return null;
+}
+
+function setCache(key: string, data: unknown) {
+  cache.set(key, { data, ts: Date.now() });
+}
+
 export async function GET(req: NextRequest) {
   const action = req.nextUrl.searchParams.get("action");
 
   if (action === "teams") {
+    const cacheKey = "teams";
+    const cached = getCached<{ id: string; name: string }[]>(cacheKey);
+    if (cached) return NextResponse.json(cached);
+
     const teams = await linear.teams({ first: 100 });
     const data = teams.nodes.map((t) => ({ id: t.id, name: t.name }));
+    setCache(cacheKey, data);
     return NextResponse.json(data);
   }
 
   if (action === "projects") {
     const teamId = req.nextUrl.searchParams.get("teamId");
+    const cacheKey = `projects:${teamId}`;
+    const cached = getCached<{ id: string; name: string }[]>(cacheKey);
+    if (cached) return NextResponse.json(cached);
+
     const filter: Record<string, unknown> = {};
     if (teamId) {
       filter.accessibleTeams = { some: { id: { eq: teamId } } };
@@ -24,13 +47,16 @@ export async function GET(req: NextRequest) {
       orderBy: "updatedAt" as never,
     });
     const data = projects.nodes.map((p) => ({ id: p.id, name: p.name }));
+    setCache(cacheKey, data);
     return NextResponse.json(data);
   }
 
   if (action === "labels") {
     const teamId = req.nextUrl.searchParams.get("teamId");
+    const cacheKey = `labels:${teamId}`;
+    const cached = getCached<{ id: string; name: string }[]>(cacheKey);
+    if (cached) return NextResponse.json(cached);
 
-    // Fetch team-specific labels and workspace (global) labels separately
     const teamFilter: Record<string, unknown> = teamId
       ? { team: { id: { eq: teamId } } }
       : {};
@@ -48,6 +74,7 @@ export async function GET(req: NextRequest) {
       }
     }
     data.sort((a, b) => a.name.localeCompare(b.name));
+    setCache(cacheKey, data);
     return NextResponse.json(data);
   }
 
@@ -63,12 +90,25 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const cacheKey = `issues:${teamId}:${projectId}:${labelId}`;
+    type IssueData = { id: string; identifier: string; title: string; url: string; createdAt: string; completedAt: string | null; canceledAt: string | null; estimate: number | null; stateType: string; stateName: string; assignee: string | null; project: string | null; priority: number; priorityLabel: string };
+    const cached = getCached<IssueData[]>(cacheKey);
+
+    if (cached) {
+      // Serve cached data as a single NDJSON line
+      const line = JSON.stringify({ loaded: cached.length, hasMore: false, issues: cached }) + "\n";
+      return new Response(line, {
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    }
+
     const filter: Record<string, unknown> = {};
     if (projectId) filter.project = { id: { eq: projectId } };
     if (labelId) filter.labels = { some: { id: { eq: labelId } } };
     if (teamId) filter.team = { id: { eq: teamId } };
 
     const BATCH_SIZE = 20;
+    const allIssues: IssueData[] = [];
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -116,6 +156,7 @@ export async function GET(req: NextRequest) {
               })
             );
 
+            allIssues.push(...issues);
             loaded += issues.length;
             const done = !hasMore && i + BATCH_SIZE >= nodes.length;
 
@@ -125,6 +166,7 @@ export async function GET(req: NextRequest) {
           }
         }
 
+        setCache(cacheKey, allIssues);
         controller.close();
       },
     });
