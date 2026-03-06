@@ -184,6 +184,100 @@ function applyProjection(
   return today;
 }
 
+// Flow-based projection for CFD: models issues flowing through the pipeline
+// Backlog → Unstarted → Started → Completed/Canceled
+function applyCfdProjection(
+  data: Record<string, string | number>[],
+  keys: string[],
+  days: string[],
+): string | undefined {
+  const today = todayLocal();
+  const todayIdx = days.indexOf(today);
+  if (todayIdx < 1 || todayIdx >= days.length - 1) return undefined;
+
+  const lookback = Math.min(7, todayIdx);
+  const refIdx = todayIdx - lookback;
+
+  // Calculate the daily completion rate (how many issues move to done states)
+  const doneKeys = ["Completed", "Canceled"];
+  const pipelineKeys = ["Backlog", "Unstarted", "Started"];
+
+  let doneRate = 0;
+  for (const key of doneKeys) {
+    if (keys.includes(key)) {
+      doneRate += ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+    }
+  }
+
+  // If nothing is being completed, fall back to independent projection
+  if (doneRate <= 0) {
+    return applyProjection(data, keys, days);
+  }
+
+  // Determine which done category is growing (split proportionally)
+  const doneRates: Record<string, number> = {};
+  for (const key of doneKeys) {
+    if (keys.includes(key)) {
+      const rate = ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+      doneRates[key] = Math.max(0, rate);
+    }
+  }
+  const totalDoneRate = Object.values(doneRates).reduce((a, b) => a + b, 0);
+
+  for (let i = todayIdx + 1; i < data.length; i++) {
+    const ahead = i - todayIdx;
+    const prev = data[i - 1];
+    data[i]._projected = 1;
+
+    // Start from previous day's values
+    const vals: Record<string, number> = {};
+    for (const key of keys) {
+      vals[key] = prev[key] as number;
+    }
+
+    // Flow: move doneRate units through the pipeline each day
+    let remaining = doneRate;
+
+    // Pull from Started first, then Unstarted, then Backlog
+    for (const src of ["Started", "Unstarted", "Backlog"]) {
+      if (!keys.includes(src) || remaining <= 0) continue;
+      const take = Math.min(remaining, vals[src]);
+      vals[src] -= take;
+      remaining -= take;
+    }
+
+    // Add to done categories proportionally
+    if (totalDoneRate > 0) {
+      for (const key of doneKeys) {
+        if (keys.includes(key) && doneRates[key] > 0) {
+          vals[key] += doneRate * (doneRates[key] / totalDoneRate);
+        }
+      }
+    }
+
+    // Replenish Started from Unstarted/Backlog (keep Started stable)
+    const startedToday = data[todayIdx]["Started"] as number | undefined;
+    if (keys.includes("Started") && startedToday != null) {
+      const deficit = startedToday - vals["Started"];
+      if (deficit > 0) {
+        for (const src of ["Unstarted", "Backlog"]) {
+          if (!keys.includes(src)) continue;
+          const take = Math.min(deficit, vals[src]);
+          vals[src] -= take;
+          vals["Started"] += take;
+          if (vals["Started"] >= startedToday) break;
+        }
+      }
+    }
+
+    for (const key of keys) {
+      data[i][key] = Math.max(0, Math.round(vals[key]));
+    }
+  }
+
+  return today;
+}
+
 function buildCfdData(issues: Issue[], startDate: string, endDate: string): ChartResult {
   if (issues.length === 0) return { data: [], keys: [] };
 
@@ -224,7 +318,7 @@ function buildCfdData(issues: Issue[], startDate: string, endDate: string): Char
   }
 
   const keysArr = [...keys];
-  const projectedFrom = applyProjection(data, keysArr, days);
+  const projectedFrom = applyCfdProjection(data, keysArr, days);
 
   if (projectedFrom) {
     const projKeys = keysArr.map((k) => `${k} (projected)`);
