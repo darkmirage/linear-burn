@@ -464,23 +464,20 @@ export default function Home() {
             </ResponsiveContainer>
           </div>
 
-          <details className="bg-gray-900 rounded-lg p-4" open={!!selectedDay}>
-            <summary className="cursor-pointer font-medium text-gray-300">
+          <div className="bg-gray-900 rounded-lg p-4">
+            <div className="font-medium text-gray-300 mb-4">
               Issues ({filteredIssues.length}
               {selectedDay ? ` on ${selectedDay}` : ""})
               {selectedDay && (
                 <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedDay(null);
-                  }}
+                  onClick={() => setSelectedDay(null)}
                   className="ml-2 text-xs text-gray-400 hover:text-gray-200 underline"
                 >
                   clear filter
                 </button>
               )}
-            </summary>
-            <table className="w-full mt-4 text-sm">
+            </div>
+            <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-400 border-b border-gray-800">
                   <th className="pb-2">ID</th>
@@ -546,7 +543,7 @@ export default function Home() {
                 ))}
               </tbody>
             </table>
-          </details>
+          </div>
         </>
       )}
     </main>

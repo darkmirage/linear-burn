@@ -68,6 +68,8 @@ export async function GET(req: NextRequest) {
     if (labelId) filter.labels = { some: { id: { eq: labelId } } };
     if (teamId) filter.team = { id: { eq: teamId } };
 
+    const BATCH_SIZE = 20;
+
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
@@ -76,44 +78,51 @@ export async function GET(req: NextRequest) {
         let cursor: string | undefined;
 
         while (hasMore) {
-          const issues = await linear.issues({
+          const page = await linear.issues({
             first: 100,
             after: cursor,
             filter,
           });
 
-          const batch = [];
-          for (const issue of issues.nodes) {
-            const [state, assignee, project] = await Promise.all([
-              issue.state,
-              issue.assignee,
-              issue.project,
-            ]);
-            batch.push({
-              id: issue.id,
-              identifier: issue.identifier,
-              title: issue.title,
-              url: issue.url,
-              createdAt: issue.createdAt.toISOString(),
-              completedAt: issue.completedAt?.toISOString() ?? null,
-              canceledAt: issue.canceledAt?.toISOString() ?? null,
-              estimate: issue.estimate ?? null,
-              stateType: state?.type ?? "unknown",
-              stateName: state?.name ?? "Unknown",
-              assignee: assignee?.name ?? null,
-              project: project?.name ?? null,
-              priority: issue.priority,
-              priorityLabel: issue.priorityLabel,
-            });
+          hasMore = page.pageInfo.hasNextPage;
+          cursor = page.pageInfo.endCursor ?? undefined;
+          const nodes = page.nodes;
+
+          for (let i = 0; i < nodes.length; i += BATCH_SIZE) {
+            const slice = nodes.slice(i, i + BATCH_SIZE);
+            const issues = await Promise.all(
+              slice.map(async (issue) => {
+                const [state, assignee, project] = await Promise.all([
+                  issue.state,
+                  issue.assignee,
+                  issue.project,
+                ]);
+                return {
+                  id: issue.id,
+                  identifier: issue.identifier,
+                  title: issue.title,
+                  url: issue.url,
+                  createdAt: issue.createdAt.toISOString(),
+                  completedAt: issue.completedAt?.toISOString() ?? null,
+                  canceledAt: issue.canceledAt?.toISOString() ?? null,
+                  estimate: issue.estimate ?? null,
+                  stateType: state?.type ?? "unknown",
+                  stateName: state?.name ?? "Unknown",
+                  assignee: assignee?.name ?? null,
+                  project: project?.name ?? null,
+                  priority: issue.priority,
+                  priorityLabel: issue.priorityLabel,
+                };
+              })
+            );
+
+            loaded += issues.length;
+            const done = !hasMore && i + BATCH_SIZE >= nodes.length;
+
+            controller.enqueue(
+              encoder.encode(JSON.stringify({ loaded, hasMore: !done, issues }) + "\n")
+            );
           }
-
-          loaded += batch.length;
-          hasMore = issues.pageInfo.hasNextPage;
-          cursor = issues.pageInfo.endCursor ?? undefined;
-
-          controller.enqueue(
-            encoder.encode(JSON.stringify({ loaded, hasMore, issues: batch }) + "\n")
-          );
         }
 
         controller.close();
