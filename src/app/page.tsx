@@ -165,17 +165,22 @@ function applyProjection(
   const todayIdx = days.indexOf(today);
   if (todayIdx < 1 || todayIdx >= days.length - 1) return undefined;
 
-  const lookback = Math.min(7, todayIdx);
-  const refIdx = todayIdx - lookback;
+  // Use yesterday for rate calculation so a partial (in-progress) day
+  // doesn't dilute the rate and make projections jump at day boundaries.
+  const yestIdx = todayIdx - 1;
+  const lookback = Math.min(7, yestIdx);
+  if (lookback < 1) return undefined;
+  const refIdx = yestIdx - lookback;
 
   // Compute aggregate rate across all keys so the total is consistent
   // regardless of how many keys (color groups) there are.
-  let totalNow = 0, totalRef = 0;
+  let totalNow = 0, totalYest = 0, totalRef = 0;
   for (const key of keys) {
     totalNow += data[todayIdx][key] as number;
+    totalYest += data[yestIdx][key] as number;
     totalRef += data[refIdx][key] as number;
   }
-  const aggRate = (totalNow - totalRef) / lookback;
+  const aggRate = (totalYest - totalRef) / lookback;
 
   // Each key's share of the current total (for proportional distribution)
   const shares: Record<string, number> = {};
@@ -206,8 +211,11 @@ function applyCfdProjection(
   const todayIdx = days.indexOf(today);
   if (todayIdx < 1 || todayIdx >= days.length - 1) return undefined;
 
-  const lookback = Math.min(7, todayIdx);
-  const refIdx = todayIdx - lookback;
+  // Use yesterday for rate calculation so a partial day doesn't dilute the rate.
+  const yestIdx = todayIdx - 1;
+  const lookback = Math.min(7, yestIdx);
+  if (lookback < 1) return undefined;
+  const refIdx = yestIdx - lookback;
 
   // Calculate the daily completion rate (how many issues move to done states)
   const doneKeys = ["Completed", "Canceled"];
@@ -216,7 +224,7 @@ function applyCfdProjection(
   let doneRate = 0;
   for (const key of doneKeys) {
     if (keys.includes(key)) {
-      doneRate += ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+      doneRate += ((data[yestIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
     }
   }
 
@@ -229,7 +237,7 @@ function applyCfdProjection(
   const doneRates: Record<string, number> = {};
   for (const key of doneKeys) {
     if (keys.includes(key)) {
-      const rate = ((data[todayIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
+      const rate = ((data[yestIdx][key] as number) - (data[refIdx][key] as number)) / lookback;
       doneRates[key] = Math.max(0, rate);
     }
   }
