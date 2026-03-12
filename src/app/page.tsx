@@ -174,9 +174,8 @@ function applyProjection(
 
   // Compute aggregate rate across all keys so the total is consistent
   // regardless of how many keys (color groups) there are.
-  let totalNow = 0, totalYest = 0, totalRef = 0;
+  let totalYest = 0, totalRef = 0;
   for (const key of keys) {
-    totalNow += data[todayIdx][key] as number;
     totalYest += data[yestIdx][key] as number;
     totalRef += data[refIdx][key] as number;
   }
@@ -185,13 +184,14 @@ function applyProjection(
   // Each key's share of the current total (for proportional distribution)
   const shares: Record<string, number> = {};
   for (const key of keys) {
-    shares[key] = totalNow > 0 ? (data[todayIdx][key] as number) / totalNow : 1 / keys.length;
+    shares[key] = totalYest > 0 ? (data[yestIdx][key] as number) / totalYest : 1 / keys.length;
   }
 
+  // Project from yesterday's values so today's expected progress is included.
   for (let i = todayIdx + 1; i < data.length; i++) {
-    const ahead = i - todayIdx;
+    const ahead = i - yestIdx;
     data[i]._projected = 1;
-    const projectedTotal = Math.max(0, totalNow + aggRate * ahead);
+    const projectedTotal = Math.max(0, totalYest + aggRate * ahead);
     for (const key of keys) {
       data[i][key] = Math.max(0, Math.round(projectedTotal * shares[key]));
     }
